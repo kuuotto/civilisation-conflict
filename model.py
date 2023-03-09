@@ -1,7 +1,4 @@
 # %%
-
-%matplotlib widget
-
 import numpy as np
 import pandas as pd
 import matplotlib as mpl
@@ -10,7 +7,6 @@ from matplotlib.patches import Circle
 from matplotlib.animation import ArtistAnimation
 
 import mesa
-
 # %%
 
 def influence_radius(tech_level):
@@ -36,6 +32,14 @@ class Civilisation(mesa.Agent):
     def __init__(self, unique_id, model, growth, **growth_kwargs) -> None:
         super().__init__(unique_id, model)
 
+        # initialise reset time, which is updated if the civilisation is 
+        # destroyed
+        self.reset_time = 0
+
+        # initialise visibility factor -- the civilisation can choose to hide 
+        # which decreases its apparent tech level (=technosignature)
+        self.visibility_factor = 1
+
         # by default, choose growth parameters randomly
         if len(growth_kwargs) < 1 and growth==sigmoid_growth:
             growth_kwargs = {'speed': self.model.random.uniform(2, 4),
@@ -44,21 +48,86 @@ class Civilisation(mesa.Agent):
         # save the growth function
         self.growth = lambda time: growth(time, **growth_kwargs)
 
-        # get initial tech level
-        self.tech_level = self.growth(0)
-        self.influence_radius = influence_radius(self.tech_level)
+        # initialise own tech level
+        self.step_tech_level()
 
-    def step(self):
-        new_tech_level = self.growth(self.model.schedule.time)
-        #print(f"{self.unique_id}: {self.tech_level:.4f} -> {new_tech_level:.4f}")
+        # initialise a dictionary of neighbour tech level beliefs
+        self.tech_beliefs = dict()
+        
+
+    def step_tech_level(self):
+        # update own tech level
+        new_tech_level = self.growth(self.model.schedule.time - self.reset_time)
         self.tech_level = new_tech_level
-        self.influence_radius = influence_radius(self.tech_level)
+        self.influence_radius = influence_radius(new_tech_level)
+
+    def step_tech_beliefs(self):
+        # update tech beliefs
+        for neighbour in self.get_neighbouring_agents():
+            # add Gaussian noise to the technosignature (which is a product
+            # of the technology level and the visibility factor)
+            noisy_tech_level = (neighbour.tech_level*neighbour.visibility_factor + 
+                                self.random.gauss(mu=0, sigma=0.1))
+            self.tech_beliefs[neighbour] = np.clip(noisy_tech_level, 0, 1)
+
+    def step_act(self):
+        """
+        The agent chooses an action. Possible actions include attacking a 
+        neighbour, decreasing the civilisation's own technosignature (technology
+        level perceived by others) and doing nothing.
+
+        Currently, one of these options is chosen randomly. In the future, this
+        will change to choosing an action based on the equilibria of 
+        hypothetical games.
+        """
+        neighbours = self.get_neighbouring_agents()
+        action = self.random.choice(neighbours + ['hide', 'no action'])
+
+        if isinstance(action, Civilisation):
+            self.dprint(f"Attacks {action.unique_id}")
+            action.attack(self)
+        elif action=="hide":
+            # TODO: define hiding more rigorously
+            self.visibility_factor = 0.1
+            self.dprint(f"Hides")
+        elif action=="no action":
+            self.dprint("No action")
+
+
+    def attack(self, attacker):
+        """
+        This is called when the civilisation is attacked. The target is
+        destroyed iff the attacker is stronger than the target.
+        """
+        if attacker.tech_level > self.tech_level:
+            # civilisation is destroyed
+            self.reset_time = self.model.schedule.time
+            self.dprint(f"Attack successful ({attacker.tech_level:.3f}" +
+                        f" > {self.tech_level:.3f})")
+        else:
+            # TODO: update hostility beliefs after a failed attack
+            self.dprint(f"Attack failed ({attacker.tech_level:.3f}" +
+                        f" < {self.tech_level:.3f})")
+
+    def get_neighbouring_agents(self):
+        return self.model.space.get_neighbors(pos=self.pos, 
+                                              radius=self.influence_radius, 
+                                              include_center=False)     
+
+    def dprint(self, message):
+        """Prints message to the console if debugging flag is on"""
+        if self.model.debug:
+            print(f"t={self.model.schedule.time}, {self.unique_id}:", message)
 
 class Universe(mesa.Model):
 
-    def __init__(self, num_agents, toroidal_space=False, agent_growth=sigmoid_growth) -> None:
+    def __init__(self, num_agents, toroidal_space=False, 
+                 agent_growth=sigmoid_growth, debug=False) -> None:
         
-        self.schedule = mesa.time.RandomActivation(self)
+        self.schedule = SingleActivation(self, 
+                                         update_methods=['step_tech_level', 
+                                                         'step_tech_beliefs'], 
+                                         step_method='step_act')
         self.space = mesa.space.ContinuousSpace(x_max=1, y_max=1, 
                                                 torus=toroidal_space)
 
@@ -66,7 +135,10 @@ class Universe(mesa.Model):
         for i in range(num_agents):
             agent = Civilisation(i, self, agent_growth)
             self.schedule.add(agent)
-            x, y = self.random.random(), self.random.random() # todo
+
+            # place agent in a randomly chosen position
+            # TODO: consider the distribution of stars
+            x, y = self.random.random(), self.random.random()
             self.space.place_agent(agent, (x, y))
 
         # initialise data collection
@@ -77,11 +149,65 @@ class Universe(mesa.Model):
                 "Position": "pos"
             })
 
+        # whether to print debug prints
+        self.debug = debug
+
     def step(self):
         """Advance the model by one step."""
         self.datacollector.collect(self)
         self.schedule.step()
 
+class SingleActivation(mesa.time.BaseScheduler):
+    """
+    A scheduler which first calls the update method(s) for every agent (if
+    there are multiple, this is done in stages: the first update method
+    is executed for every agent before moving on to the next). Finally,
+    a random agent is activated to perform a step method.
+    """
+
+    def __init__(self, model: mesa.Model, update_methods: list[str],
+                 step_method: str) -> None:
+        """
+        Create an empty Single Activation schedule.
+
+        Args:
+            model: Model object associated with the schedule.
+            update_methods: List of strings of names of stages to run, in the
+                            order to run them in.
+            step_method: The name of the step method to be activated in a 
+                         single randomly chosen agent.
+        """
+        super().__init__(model)
+        self.update_methods = update_methods
+        self.step_method = step_method
+
+    def step(self) -> None:
+        """
+        Executes the update method(s) of all agents (if multiple, in stages)
+        and then the step method of a randomly chosen agent.
+        """
+        # To be able to remove and/or add agents during stepping
+        # it's necessary to cast the keys view to a list.
+        agent_keys = list(self._agents.keys())
+
+        # run update methods in stages for all agents
+        for update_method in self.update_methods:
+            for agent_key in agent_keys:
+                if agent_key in self._agents:
+                    # run update method
+                    getattr(self._agents[agent_key], update_method)()
+
+            # We recompute the keys because some agents might have been removed
+            # in the previous loop.
+            agent_keys = list(self._agents.keys())
+
+        # finally, choose a random agent to step
+        agent = self.model.random.choice(agent_keys)
+        getattr(self._agents[agent], self.step_method)()
+
+        # increase time
+        self.time += 1
+        self.steps += 1
 
 # %%
 
@@ -94,14 +220,6 @@ def draw_universe(model=None, data=None, colormap=mpl.colormaps['Dark2']):
     If given data with multiple timesteps, draw an animation of the 
     configurations in the data.
     """
-
-    steps = (1,)
-
-    if data is not None and isinstance(data, pd.DataFrame):
-
-        # if there are multiple steps, we animate
-        steps = data.index.get_level_values('Step').unique()
-
 
     if model:
         # if we are given a model, turn its current state into a DataFrame
@@ -120,6 +238,9 @@ def draw_universe(model=None, data=None, colormap=mpl.colormaps['Dark2']):
                                 [(steps[0], id) for id in ids], 
                                 names=['Step', 'AgentID']))
 
+    # steps and agents to animate
+    steps = data.index.get_level_values('Step').unique()
+    agents = data.index.get_level_values('AgentID').unique()
 
     # initialise plot
     plt.style.use('dark_background')
@@ -128,17 +249,22 @@ def draw_universe(model=None, data=None, colormap=mpl.colormaps['Dark2']):
     ax.set_ylim(0, 1)
     ax.set_aspect('equal')
 
-    agents = data.index.get_level_values('AgentID').unique()
-
+    # artists will store lists corresponding to elements draw at each step
     artists = []
 
     for step in steps:
 
+        # list containing all elements to draw at this time step
         step_artists = []
 
+        # add text indicating time step
+        text = ax.text(0.45, 1.05, f"t = {step}")
+        step_artists.append(text)
+
+        # choose data just from this time step
         step_data = data.xs(step, level="Step")
 
-        # first draw universal agents (infinite vision)
+        ### first draw universal agents (infinite vision)
         universal_agent_data = step_data[step_data['Radius of Influence'] >= 1]
         ids = universal_agent_data.index.get_level_values('AgentID')
         positions = universal_agent_data['Position']
@@ -149,7 +275,7 @@ def draw_universe(model=None, data=None, colormap=mpl.colormaps['Dark2']):
         paths = ax.scatter(x, y, c=colors, s=7**2, marker="d")
         step_artists.append(paths)
 
-        # draw other agents, showing their radius of influence
+        ### draw other agents, showing their radius of influence
         normal_agent_data = step_data[step_data['Radius of Influence'] < 1]
         ids = normal_agent_data.index.get_level_values('AgentID')
         positions = normal_agent_data['Position']
@@ -169,8 +295,8 @@ def draw_universe(model=None, data=None, colormap=mpl.colormaps['Dark2']):
 
         artists.append(step_artists)
 
+    # if there are multiple steps, animate
     if len(steps) > 1:
-        # create animation
         ani = ArtistAnimation(fig=fig, artists=artists, interval=200, repeat=True)
         return ani
 
@@ -178,14 +304,15 @@ def draw_universe(model=None, data=None, colormap=mpl.colormaps['Dark2']):
 
 
 # %%
-model = Universe(5)
+
+# create a test universe with five civilisations
+model = Universe(5, debug=True)
 for i in range(50):
     model.step()
 
-print(f"Final results after {model.schedule.time} steps")
-for agent in model.schedule.agents:
-    print(f"{agent.unique_id}: tech {agent.tech_level:.4f}, radius {agent.influence_radius:.4f}")
-
+# retrieve and visualise data
 data = model.datacollector.get_agent_vars_dataframe() 
 vis = draw_universe(data=data)
 plt.show()
+
+# %%
