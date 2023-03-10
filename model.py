@@ -268,7 +268,8 @@ class Civilisation(mesa.Agent):
                         f"> {self.tech_level:.3f})")
         else:
 
-            # TODO: update hostility beliefs after a failed attack
+            # update hostility beliefs after a failed attack
+            self.hostility_beliefs[attacker] = 1
             self.dprint(f"Attack failed ({attacker.tech_level:.3f}",
                         f"< {self.tech_level:.3f})")
                 
