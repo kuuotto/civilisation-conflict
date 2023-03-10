@@ -5,6 +5,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from matplotlib.animation import ArtistAnimation
+from scipy.stats import binom
 
 import mesa
 # %%
@@ -18,6 +19,12 @@ def influence_radius(tech_level):
     """
     return 0.1*np.tan(tech_level * (np.pi / 2))
 
+def inv_influence_radius(inf_radius):
+    """
+    Gives the tech level corresponding to a given influence radius
+    """
+    return (2/np.pi) * np.arctan(10*inf_radius)
+
 def sigmoid_growth(time, speed, takeoff_time):
     """
     Gives the current technology level for the agent. Assumes a
@@ -25,6 +32,20 @@ def sigmoid_growth(time, speed, takeoff_time):
     civilisations.
     """
     return 1/(1+np.exp(-speed*(time - takeoff_time)))
+
+def prob_smaller(rv1, rv2, n_samples=1000):
+    """
+    Uses Monte Carlo sampling to determine the probability for the event
+    rv1 < rv2.
+
+    Arguments:
+    rv1, rv2: callables that return i.i.d. random samples from the variables,
+              should have a keyword argument "size" for number of samples
+    n_samples: number of samples to draw from each random variable
+    """
+    sample1 = rv1(size=n_samples)
+    sample2 = rv2(size=n_samples)
+    return np.mean(sample1 < sample2)
 
 class Civilisation(mesa.Agent):
     """An agent represeting a single civilisation in the universe"""
@@ -40,6 +61,11 @@ class Civilisation(mesa.Agent):
         # which decreases its apparent tech level (=technosignature)
         self.visibility_factor = 1
 
+        # keep track of the last time this civilisation acted
+        # this is used for preventing hostility belief updates when this
+        # civilisation destroyed another
+        self.last_acted = -1
+
         # by default, choose growth parameters randomly
         if len(growth_kwargs) < 1 and growth==sigmoid_growth:
             growth_kwargs = {'speed': self.model.random.uniform(2, 4),
@@ -53,22 +79,146 @@ class Civilisation(mesa.Agent):
 
         # initialise a dictionary of neighbour tech level beliefs
         self.tech_beliefs = dict()
+
+        # initialise a dictionary of neighbour hostility beliefs
+        self.hostility_beliefs = dict()
         
 
     def step_tech_level(self):
-        # update own tech level
+        """Update own tech level"""
+        # tech level is discretised
         new_tech_level = self.growth(self.model.schedule.time - self.reset_time)
+        new_tech_level = np.round(new_tech_level, 1)
+
+        # update tech level and calculate new influence radius
         self.tech_level = new_tech_level
         self.influence_radius = influence_radius(new_tech_level)
 
-    def step_tech_beliefs(self):
-        # update tech beliefs
-        for neighbour in self.get_neighbouring_agents():
+    def step_update_beliefs(self):
+        """
+        Update beliefs regarding technology level and hostility of 
+        neighbours.
+        """
+        neighbours = self.get_neighbouring_agents()
+
+        ### update technology beliefs
+        # also estimate whether a civilisation has been destroyed;
+        # if there is a civilisation that has been destroyed with a high
+        # probability, we update hostility beliefs. If there are multiple,
+        # we update based on the one that is the most likely to have been
+        # destoryed
+
+        new_tech_beliefs = dict()
+        old_tech_beliefs = self.tech_beliefs
+        destroyed_civilisation, max_prob_destr = None, 0
+
+        for neighbour in neighbours:
+
             # add Gaussian noise to the technosignature (which is a product
             # of the technology level and the visibility factor)
             noisy_tech_level = (neighbour.tech_level*neighbour.visibility_factor + 
-                                self.random.gauss(mu=0, sigma=0.1))
-            self.tech_beliefs[neighbour] = np.clip(noisy_tech_level, 0, 1)
+                                self.random.gauss(mu=0, sigma=0.05))
+            noisy_tech_level = np.clip(noisy_tech_level, 0, 1)
+            new_tech_level = binom(n=10, p=noisy_tech_level)
+            new_tech_beliefs[neighbour] = new_tech_level
+
+            ### next, estimate if this civilisation has been destoryed during
+            ### the previous round
+            # if we don't have previous beliefs about this neighbour's
+            # capabilities, we can't say if it has been destroyed
+            if neighbour not in old_tech_beliefs:
+                continue
+
+            # don't update hostility beliefs if we acted last round, because
+            # we know we were the perpetrator
+            if self.last_acted == self.model.schedule.time - 1:
+                continue
+
+            # calculate probability that the neighbour was destroyed, i.e.
+            # that the new tech level is lower than the old
+            old_tech_level = old_tech_beliefs[neighbour]
+            prob_destr = prob_smaller(new_tech_level.rvs, old_tech_level.rvs)
+
+            # if this civilisation is the most likely one to have been 
+            # destroyed, save it
+            if prob_destr > max_prob_destr:
+                destroyed_civilisation = neighbour
+                max_prob_destr = prob_destr
+
+        # save changes
+        self.tech_beliefs = new_tech_beliefs
+
+        ### update hostility beliefs
+
+        # TODO: this is where prior hostility beliefs are currently defined
+        old_hostility_beliefs = self.hostility_beliefs
+        new_hostility_beliefs = {neighbour: 0.01 
+                                            if neighbour not in old_hostility_beliefs 
+                                            else old_hostility_beliefs[neighbour] 
+                                            for neighbour in neighbours}
+
+
+        # if there are no civilisations that we are very confident have been
+        # destroyed, don't update hostility beliefs
+        if not destroyed_civilisation or max_prob_destr < 0.9:
+            self.hostility_beliefs = new_hostility_beliefs
+            return
+
+        self.dprint(f"Updating hostility beliefs because",
+                    f"{destroyed_civilisation.unique_id} was destroyed")
+
+        destr_tech_level = old_tech_beliefs[destroyed_civilisation]
+
+        # calculate the capabilities of all neighbours
+        perp_values = dict()
+        for perpetrator in neighbours:
+
+            if perpetrator==destroyed_civilisation:
+                continue
+
+            # if we don't have information about this possible perpetrator
+            # from the last time step, we can't say anything about whether
+            # they could've been the culprit
+            if perpetrator not in old_tech_beliefs:
+                continue
+
+            assert(perpetrator in old_hostility_beliefs)
+
+            perpetrator_tech_level = old_tech_beliefs[perpetrator]
+
+            # tech level required for perpetrator to be able to reach the
+            # destoryed civilisation
+            distance = self.model.space.get_distance(destroyed_civilisation.pos, 
+                                                     perpetrator.pos)
+            req_tech_level = inv_influence_radius(distance)
+
+            # probability that perpetrator 
+            # i) had a higher tech level than the destroyed neighbour, and
+            # ii) could reach the destroyed neighbour
+            prob_capable = prob_smaller(lambda size: np.maximum(
+                                            destr_tech_level.rvs(size=size), 
+                                            req_tech_level),
+                                        perpetrator_tech_level.rvs)
+            perp_values[perpetrator] = (prob_capable, 
+                                        old_hostility_beliefs[perpetrator])
+
+        # calculate the updated hostility beliefs
+        if len(perp_values) > 0:
+            denominator = np.sum([c*h for perp, (c, h) in perp_values.items()])
+
+            if denominator > 0:
+                new_hostility_beliefs.update({perp: h + c*h/denominator - c*h**2 / denominator 
+                                              for perp, (c, h) in perp_values.items()})
+
+                self.dprint(f"New hostility beliefs:", 
+                    *(f"{agent.unique_id}: {old_hostility_beliefs[agent]:.3f} -> {new_belief:.3f}" 
+                      for agent, new_belief in new_hostility_beliefs.items() 
+                      if agent in old_hostility_beliefs))
+            else:
+                self.dprint(f"Cannot update hostility beliefs because no neighbour is deemed capable of destroying {destroyed_civilisation.unique_id}")
+
+        # save changes
+        self.hostility_beliefs = new_hostility_beliefs
 
     def step_act(self):
         """
@@ -81,43 +231,57 @@ class Civilisation(mesa.Agent):
         hypothetical games.
         """
         neighbours = self.get_neighbouring_agents()
-        action = self.random.choice(neighbours + ['hide', 'no action'])
+        actions = neighbours + ['no action']
+        if self.visibility_factor == 1:
+            actions += ['hide']
+        action = self.random.choice(actions)
 
         if isinstance(action, Civilisation):
             self.dprint(f"Attacks {action.unique_id}")
             action.attack(self)
         elif action=="hide":
             # TODO: define hiding more rigorously
-            self.visibility_factor = 0.1
+            self.visibility_factor = 0.5
             self.dprint(f"Hides")
         elif action=="no action":
             self.dprint("No action")
+
+        # update last acted time
+        self.last_acted = self.model.schedule.time
 
 
     def attack(self, attacker):
         """
         This is called when the civilisation is attacked. The target is
         destroyed iff the attacker is stronger than the target.
+
+        In case of a tie, the target is destroyed with a 50% probability.
         """
-        if attacker.tech_level > self.tech_level:
+        if (attacker.tech_level > self.tech_level or 
+            (attacker.tech_level == self.tech_level and
+             self.model.random.random() > 0.5)):
+
             # civilisation is destroyed
             self.reset_time = self.model.schedule.time
-            self.dprint(f"Attack successful ({attacker.tech_level:.3f}" +
-                        f" > {self.tech_level:.3f})")
+            self.visibility_factor = 1
+            self.dprint(f"Attack successful ({attacker.tech_level:.3f}",
+                        f"> {self.tech_level:.3f})")
         else:
+
             # TODO: update hostility beliefs after a failed attack
-            self.dprint(f"Attack failed ({attacker.tech_level:.3f}" +
-                        f" < {self.tech_level:.3f})")
+            self.dprint(f"Attack failed ({attacker.tech_level:.3f}",
+                        f"< {self.tech_level:.3f})")
+                
 
     def get_neighbouring_agents(self):
         return self.model.space.get_neighbors(pos=self.pos, 
                                               radius=self.influence_radius, 
                                               include_center=False)     
 
-    def dprint(self, message):
+    def dprint(self, *message):
         """Prints message to the console if debugging flag is on"""
         if self.model.debug:
-            print(f"t={self.model.schedule.time}, {self.unique_id}:", message)
+            print(f"t={self.model.schedule.time}, {self.unique_id}:", *message)
 
 class Universe(mesa.Model):
 
@@ -126,7 +290,7 @@ class Universe(mesa.Model):
         
         self.schedule = SingleActivation(self, 
                                          update_methods=['step_tech_level', 
-                                                         'step_tech_beliefs'], 
+                                                         'step_update_beliefs'], 
                                          step_method='step_act')
         self.space = mesa.space.ContinuousSpace(x_max=1, y_max=1, 
                                                 torus=toroidal_space)
