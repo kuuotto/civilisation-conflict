@@ -33,7 +33,7 @@ def sigmoid_growth(time, speed, takeoff_time):
     """
     return 1/(1+np.exp(-speed*(time - takeoff_time)))
 
-def prob_smaller(rv1, rv2, n_samples=1000):
+def prob_smaller(rv1, rv2, n_samples=100, include_equal=False):
     """
     Uses Monte Carlo sampling to determine the probability for the event
     rv1 < rv2.
@@ -45,12 +45,24 @@ def prob_smaller(rv1, rv2, n_samples=1000):
     """
     sample1 = rv1(size=n_samples)
     sample2 = rv2(size=n_samples)
-    return np.mean(sample1 < sample2)
+    return np.mean(sample1 <= sample2) if include_equal else np.mean(sample1 < sample2)
+
+
+class TechBelief():
+    """Helper class for converting distributions into the range [0,1]"""
+
+    def __init__(self, distribution):
+        self.distribution = distribution
+        self._max = distribution.support()[1]
+
+    def rvs(self, size):
+        return self.distribution.rvs(size=size) / self._max
 
 class Civilisation(mesa.Agent):
     """An agent represeting a single civilisation in the universe"""
 
-    def __init__(self, unique_id, model, growth, **growth_kwargs) -> None:
+    def __init__(self, unique_id, model, growth, decision_making, 
+                 **growth_kwargs) -> None:
         super().__init__(unique_id, model)
 
         # initialise reset time, which is updated if the civilisation is 
@@ -71,9 +83,10 @@ class Civilisation(mesa.Agent):
             growth_kwargs = {'speed': self.model.random.uniform(2, 4),
                              'takeoff_time': self.model.random.randrange(1, 20)}
         
-        # save the growth function
+        # save parameters
         self.growth = lambda time: growth(time, **growth_kwargs)
-
+        self.decision_making = decision_making
+    
         # initialise own tech level
         self.step_tech_level()
 
@@ -119,7 +132,7 @@ class Civilisation(mesa.Agent):
             noisy_tech_level = (neighbour.tech_level*neighbour.visibility_factor + 
                                 self.random.gauss(mu=0, sigma=0.05))
             noisy_tech_level = np.clip(noisy_tech_level, 0, 1)
-            new_tech_level = binom(n=10, p=noisy_tech_level)
+            new_tech_level = TechBelief(binom(n=10, p=noisy_tech_level))
             new_tech_beliefs[neighbour] = new_tech_level
 
             ### next, estimate if this civilisation has been destoryed during
@@ -130,14 +143,17 @@ class Civilisation(mesa.Agent):
                 continue
 
             # don't update hostility beliefs if we acted last round, because
-            # we know we were the perpetrator
+            # we know we were the perpetrator (and we already reset the
+            # hostility belief regarding the target)
             if self.last_acted == self.model.schedule.time - 1:
                 continue
 
             # calculate probability that the neighbour was destroyed, i.e.
-            # that the new tech level is lower than the old
+            # that the new tech level is lower than the old (and lower than 0.1)
             old_tech_level = old_tech_beliefs[neighbour]
-            prob_destr = prob_smaller(new_tech_level.rvs, old_tech_level.rvs)
+            prob_destr = prob_smaller(new_tech_level.rvs, 
+                                      lambda size: np.minimum(
+                                        old_tech_level.rvs(size=size), 0.1))
 
             # if this civilisation is the most likely one to have been 
             # destroyed, save it
@@ -152,10 +168,10 @@ class Civilisation(mesa.Agent):
 
         # TODO: this is where prior hostility beliefs are currently defined
         old_hostility_beliefs = self.hostility_beliefs
-        new_hostility_beliefs = {neighbour: 0.01 
-                                            if neighbour not in old_hostility_beliefs 
-                                            else old_hostility_beliefs[neighbour] 
-                                            for neighbour in neighbours}
+        new_hostility_beliefs = {neighbour: self.model.hostility_belief_prior 
+                                 if neighbour not in old_hostility_beliefs 
+                                 else old_hostility_beliefs[neighbour] 
+                                 for neighbour in neighbours}
 
 
         # if there are no civilisations that we are very confident have been
@@ -166,6 +182,7 @@ class Civilisation(mesa.Agent):
 
         self.dprint(f"Updating hostility beliefs because",
                     f"{destroyed_civilisation.unique_id} was destroyed")
+        new_hostility_beliefs[destroyed_civilisation] = self.model.hostility_belief_prior
 
         destr_tech_level = old_tech_beliefs[destroyed_civilisation]
 
@@ -198,7 +215,8 @@ class Civilisation(mesa.Agent):
             prob_capable = prob_smaller(lambda size: np.maximum(
                                             destr_tech_level.rvs(size=size), 
                                             req_tech_level),
-                                        perpetrator_tech_level.rvs)
+                                        perpetrator_tech_level.rvs, 
+                                        include_equal=True)
             perp_values[perpetrator] = (prob_capable, 
                                         old_hostility_beliefs[perpetrator])
 
@@ -226,25 +244,66 @@ class Civilisation(mesa.Agent):
         neighbour, decreasing the civilisation's own technosignature (technology
         level perceived by others) and doing nothing.
 
-        Currently, one of these options is chosen randomly. In the future, this
-        will change to choosing an action based on the equilibria of 
-        hypothetical games.
+        Currently, there are two strategies for choosing actions (determined
+        by self.decision_making):
+        - "random"
+        - "targeted": only attack if we are sure a neighbour is hostile and 
+                      we believe we have higher than 50% chance of destroying 
+                      it. Also attack randomly with a 10% probability. 
+                      Otherwise choose randomly between hiding and no action
+
+        In the future, there will be an option to choose actions based on the 
+        equilibria of hypothetical games.
         """
         neighbours = self.get_neighbouring_agents()
-        actions = neighbours + ['no action']
-        if self.visibility_factor == 1:
-            actions += ['hide']
-        action = self.random.choice(actions)
 
+
+        if self.decision_making == "random":
+
+            actions = neighbours + ['no action']
+            if self.visibility_factor == 1:
+                actions += ['hide']
+            action = self.random.choice(actions)
+
+        elif self.decision_making == "targeted":
+
+            # neighbours we are sure are hostile
+            hostile_neighbours = {nbr for nbr in neighbours 
+                                  if self.hostility_beliefs[nbr] == 1}
+
+            # perceived chance of successfully destroying them
+            prob_successful_attack = {hnbr: prob_smaller(
+                                                self.tech_beliefs[hnbr].rvs, 
+                                                lambda size: self.tech_level) 
+                                      for hnbr in hostile_neighbours}
+
+            # if (len(hostile_neighbours) > 0 and 
+            #     max(prob_successful_attack.values()) >= 0.5):
+            if len(hostile_neighbours) > 0:
+                # if we are relatively sure we are technologically superior,
+                # attack
+                action = max(prob_successful_attack, 
+                             key=lambda nbr: prob_successful_attack[nbr])
+                self.dprint(f"Targeted attack at {action}")
+            else:
+
+                # random attack with 10% probability
+                if len(neighbours) > 0 and self.random.random() < 0.1:
+                    action = self.random.choice(neighbours)
+                else:
+                    action = self.random.choice(['hide', 'no action'])
+
+            
         if isinstance(action, Civilisation):
             self.dprint(f"Attacks {action.unique_id}")
             action.attack(self)
         elif action=="hide":
             # TODO: define hiding more rigorously
-            self.visibility_factor = 0.5
-            self.dprint(f"Hides")
-        elif action=="no action":
-            self.dprint("No action")
+            self.visibility_factor *= 0.7
+            self.dprint(f"Hides (tech level {self.tech_level},",
+                        f"visibility {self.visibility_factor:.3f})")
+        elif action == "no action" or action == "hide":
+            self.dprint("-")
 
         # update last acted time
         self.last_acted = self.model.schedule.time
@@ -266,6 +325,14 @@ class Civilisation(mesa.Agent):
             self.visibility_factor = 1
             self.dprint(f"Attack successful ({attacker.tech_level:.3f}",
                         f"> {self.tech_level:.3f})")
+            # tech and hostility beliefs will be reset at the beginning
+            # of the next round
+
+            # attacker gets to know that the target was destroyed.
+            # in particular, it resets its hostility beliefs
+            # regarding the target
+            attacker.hostility_beliefs[self] = self.model.hostility_belief_prior
+
         else:
 
             # update hostility beliefs after a failed attack
@@ -287,8 +354,10 @@ class Civilisation(mesa.Agent):
 class Universe(mesa.Model):
 
     def __init__(self, num_agents, toroidal_space=False, 
-                 agent_growth=sigmoid_growth, debug=False) -> None:
+                 agent_growth=sigmoid_growth, decision_making="random", 
+                 hostility_belief_prior=0.01, debug=False) -> None:
         
+        # initialise schedule and space
         self.schedule = SingleActivation(self, 
                                          update_methods=['step_tech_level', 
                                                          'step_update_beliefs'], 
@@ -298,7 +367,8 @@ class Universe(mesa.Model):
 
         # add agents
         for i in range(num_agents):
-            agent = Civilisation(i, self, agent_growth)
+            agent = Civilisation(i, self, agent_growth, 
+                                 decision_making=decision_making)
             self.schedule.add(agent)
 
             # place agent in a randomly chosen position
@@ -314,8 +384,9 @@ class Universe(mesa.Model):
                 "Position": "pos"
             })
 
-        # whether to print debug prints
+        # save parameters
         self.debug = debug
+        self.hostility_belief_prior = hostility_belief_prior
 
     def step(self):
         """Advance the model by one step."""
@@ -471,8 +542,8 @@ def draw_universe(model=None, data=None, colormap=mpl.colormaps['Dark2']):
 # %%
 
 # create a test universe with five civilisations
-model = Universe(5, debug=True)
-for i in range(50):
+model = Universe(10, decision_making="targeted", debug=True, hostility_belief_prior=0.1)
+for i in range(500):
     model.step()
 
 # retrieve and visualise data
