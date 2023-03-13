@@ -1,6 +1,7 @@
 # %%
-from model import Universe, draw_universe
+from model import Universe
 from analyse import count_streaks
+from visualise import draw_universe
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
