@@ -323,8 +323,6 @@ class Civilisation(mesa.Agent):
             # civilisation is destroyed
             self.reset_time = self.model.schedule.time
             self.visibility_factor = 1
-            self.dprint(f"Attack successful ({attacker.tech_level:.3f}",
-                        f"> {self.tech_level:.3f})")
             # tech and hostility beliefs will be reset at the beginning
             # of the next round
 
@@ -333,13 +331,22 @@ class Civilisation(mesa.Agent):
             # regarding the target
             attacker.hostility_beliefs[self] = self.model.hostility_belief_prior
 
+            self.dprint(f"Attack successful ({attacker.tech_level:.3f}",
+                        f"> {self.tech_level:.3f})")
+            result = True
         else:
-
             # update hostility beliefs after a failed attack
             self.hostility_beliefs[attacker] = 1
             self.dprint(f"Attack failed ({attacker.tech_level:.3f}",
                         f"< {self.tech_level:.3f})")
-                
+            result = False
+
+        # log attack
+        self.model.datacollector.add_table_row('attacks',
+            {'time': self.model.schedule.time,
+             'attacker': attacker.unique_id,
+             'target': self.unique_id,
+             'successful': result})
 
     def get_neighbouring_agents(self):
         return self.model.space.get_neighbors(pos=self.pos, 
@@ -378,11 +385,12 @@ class Universe(mesa.Model):
 
         # initialise data collection
         self.datacollector = mesa.DataCollector(
-            model_reporters={}, agent_reporters={
-                "Technology":  "tech_level", 
+            agent_reporters={
+                "Technology": "tech_level", 
                 "Radius of Influence": "influence_radius",
                 "Position": "pos"
-            })
+            }, 
+            tables={'attacks': ['time', 'attacker', 'target', 'successful']})
 
         # save parameters
         self.debug = debug
@@ -447,7 +455,7 @@ class SingleActivation(mesa.time.BaseScheduler):
 
 # %%
 
-def draw_universe(model=None, data=None, colormap=mpl.colormaps['Dark2']):
+def draw_universe(model=None, data=None, attack_data=None, colormap=mpl.colormaps['Dark2']):
     """
     If given a model, draw the current configuration of the universe
     in the model.
@@ -531,24 +539,13 @@ def draw_universe(model=None, data=None, colormap=mpl.colormaps['Dark2']):
 
         artists.append(step_artists)
 
+    # revert back to default style
+    plt.style.use("default")
+
     # if there are multiple steps, animate
     if len(steps) > 1:
-        ani = ArtistAnimation(fig=fig, artists=artists, interval=200, repeat=True)
+        ani = ArtistAnimation(fig=fig, artists=artists, interval=800, repeat=True)
         return ani
 
     return fig, ax
 
-
-# %%
-
-# create a test universe with five civilisations
-model = Universe(10, decision_making="targeted", debug=True, hostility_belief_prior=0.1)
-for i in range(500):
-    model.step()
-
-# retrieve and visualise data
-data = model.datacollector.get_agent_vars_dataframe() 
-vis = draw_universe(data=data)
-plt.show()
-
-# %%
