@@ -20,4 +20,10 @@ def count_streaks(data):
             streak = 1
         prev_t = t
 
+    # add final streak
+    if streak not in streaks.keys():
+        streaks[streak] = 1
+    else:
+        streaks[streak] += 1
+
     return streaks
