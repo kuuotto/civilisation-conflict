@@ -60,6 +60,9 @@ class TechBelief():
     def rvs(self, size):
         return self.rng.binomial(n=self.n, p=self.p, size=size) / self.n
 
+    def support():
+        return np.linspace(0, 1, 11).round(1)
+
 class Civilisation(mesa.Agent):
     """An agent represeting a single civilisation in the universe"""
 

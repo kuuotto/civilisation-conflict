@@ -1,19 +1,19 @@
 # %%
 from model import Universe
 from analyse import count_streaks
-from visualise import draw_universe
+from visualise import draw_universe, plot_technology_distribution
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-# %%
+# %% Run model and gather data
 
 # parameters
 params = {'decision_making': 'targeted',
           'hostility_belief_prior': 0.1,
           'num_agents': 20, 
-          'speed_range': (4,10),
+          'speed_range': (0.3, 1),
           'takeoff_time_range': (10, 100)}
-num_steps = 1000
+num_steps = 500
 
 # create a universe
 model = Universe(debug=False, **params)
@@ -24,11 +24,13 @@ for i in tqdm(range(num_steps)):
 # retrieve and visualise data
 data = model.datacollector.get_agent_vars_dataframe() 
 attack_data = model.datacollector.get_table_dataframe("attacks")
+
+# %% Visualise model run
 vis = draw_universe(data=data, attack_data=attack_data)
 plt.show()
 
-
-# %%
+# %% Diagnostic plots
+plot_technology_distribution(data)
 
 # visualise streak length distribution
 streaks = count_streaks(attack_data['time'])

@@ -1,10 +1,12 @@
 # %%
 
+import numpy as np
 import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from matplotlib.animation import ArtistAnimation
+from model import TechBelief
 
 def draw_universe(model=None, data=None, attack_data=None, colormap=mpl.colormaps['Dark2']):
     """
@@ -118,3 +120,88 @@ def draw_universe(model=None, data=None, attack_data=None, colormap=mpl.colormap
         return ani
 
     return fig, ax
+
+def get_technology_distribution_step(data, step, normalise=False):
+    """
+    Determine the technology level distribution at the given time step.
+
+    Parameters:
+    data: an agent data Pandas DataFrame collected by the model datacollector
+    step: an integer, pointing the step in the data which to use
+    normalise: whether to return a properly normalised probability distribution
+               (True) or counts (False)
+
+    Returns:
+    a dictionary where keys are technology values and values are either
+    absolute or relative frequencies (depending on the value of the normalise
+    parameter) 
+    """
+
+    # initialise distribution
+    dist = {tech: 0 for tech in TechBelief.support()}
+
+    # collect data and update distribution
+    step_data = data.xs(step, level="Step")['Technology']
+    values, frequencies = np.unique(step_data, return_counts=True)
+    if normalise and sum(frequencies) > 0:
+        frequencies = frequencies / sum(frequencies)
+    dist.update({v: f for v, f in zip(values, frequencies)})
+
+    return dist
+
+def plot_technology_distribution_step(data, step, normalise=False):
+    """
+    Plot the technology level distribution at the given time step.
+
+    Parameters:
+    data: an agent data Pandas DataFrame collected by the model datacollector
+    step: an integer, pointing the step in data which to visualise
+    normalise: whether to normalise the frequency distribution
+    """
+    # initialise figure
+    fig, ax = plt.subplots()
+
+    # calculate distribution
+    dist = get_technology_distribution_step(data=data, step=step, 
+                                            normalise=normalise)
+
+    # draw
+    ax.stem(dist.keys(), dist.values())
+    ax.set_xlabel("Technology Level")
+    ax.set_ylabel("Frequency")
+    ax.set_title(f"Technology Level Distribution at t={step}")
+    plt.show()
+
+def plot_technology_distribution(data):
+    """
+    Plot the technology level distribution over time as a heat map.
+
+    Parameters:
+    data: an agent data Pandas DataFrame collected by the model datacollector
+    """
+
+    fig, ax = plt.subplots()
+    tech_levels = TechBelief.support()
+    steps = data.index.get_level_values("Step").unique()
+
+    # initialise array
+    dist_array = np.zeros((len(tech_levels), len(steps)))
+
+    for step in steps:
+
+        # calculate distribution on this step
+        dist = get_technology_distribution_step(data=data, step=step, 
+                                                normalise=True)
+
+        dist_array[:, step] = list(dist.values())
+
+    im = ax.imshow(im, interpolation="nearest", origin="lower", 
+                   extent=(0, max(steps), 0, max(tech_levels)),
+                   aspect="auto")
+    fig.colorbar(im, label="frequency")
+
+    ax.set_title("Distribution of Technology Levels")
+    ax.set_xlabel('Time')
+    ax.set_ylabel("Technology Level")
+
+    plt.show()
