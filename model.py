@@ -1,6 +1,5 @@
 # %%
 import numpy as np
-from scipy.stats import binom
 import mesa
 
 def influence_radius(tech_level):
@@ -33,7 +32,8 @@ def prob_smaller(rv1, rv2, n_samples=100, include_equal=False):
 
     Arguments:
     rv1, rv2: callables that return i.i.d. random samples from the variables,
-              should have a keyword argument "size" for number of samples
+              should have a keyword argument "size" for number of samples.
+              Should return a NumPy array.
     n_samples: number of samples to draw from each random variable
     """
     sample1 = rv1(size=n_samples)
@@ -44,12 +44,17 @@ def prob_smaller(rv1, rv2, n_samples=100, include_equal=False):
 class TechBelief():
     """Helper class for converting distributions into the range [0,1]"""
 
-    def __init__(self, distribution):
-        self.distribution = distribution
-        self._max = distribution.support()[1]
+    def __init__(self, rng, p, n=10):
+        '''
+        p is the p parameter of a binomial distribution, which is used to 
+        represent technology beliefs
+        '''
+        self.p = p
+        self.n = n
+        self.rng = rng
 
     def rvs(self, size):
-        return self.distribution.rvs(size=size) / self._max
+        return self.rng.binomial(n=self.n, p=self.p, size=size) / self.n
 
 class Civilisation(mesa.Agent):
     """An agent represeting a single civilisation in the universe"""
@@ -57,6 +62,9 @@ class Civilisation(mesa.Agent):
     def __init__(self, unique_id, model, growth, decision_making, 
                  **growth_kwargs) -> None:
         super().__init__(unique_id, model)
+
+        # add reference to model's rng
+        self.rng = model.rng
 
         # initialise reset time, which is updated if the civilisation is 
         # destroyed
@@ -73,8 +81,8 @@ class Civilisation(mesa.Agent):
 
         # by default, choose growth parameters randomly
         if len(growth_kwargs) < 1 and growth==sigmoid_growth:
-            growth_kwargs = {'speed': self.model.random.uniform(2, 4),
-                             'takeoff_time': self.model.random.randrange(1, 20)}
+            growth_kwargs = {'speed': self.rng.uniform(2, 4),
+                             'takeoff_time': self.rng.integers(1, 20)}
         
         # save parameters
         self.growth = lambda time: growth(time, **growth_kwargs)
@@ -123,22 +131,23 @@ class Civilisation(mesa.Agent):
             # add Gaussian noise to the technosignature (which is a product
             # of the technology level and the visibility factor)
             noisy_tech_level = (neighbour.tech_level*neighbour.visibility_factor + 
-                                self.random.gauss(mu=0, sigma=0.05))
+                                self.rng.normal(loc=0, scale=0.05))
             noisy_tech_level = np.clip(noisy_tech_level, 0, 1)
-            new_tech_level = TechBelief(binom(n=10, p=noisy_tech_level))
+            new_tech_level = TechBelief(p=noisy_tech_level, rng=self.model.rng)
             new_tech_beliefs[neighbour] = new_tech_level
 
-            ### next, estimate if this civilisation has been destoryed during
+            ### next, estimate if this civilisation has been destroyed during
             ### the previous round
-            # if we don't have previous beliefs about this neighbour's
-            # capabilities, we can't say if it has been destroyed
-            if neighbour not in old_tech_beliefs:
-                continue
 
             # don't update hostility beliefs if we acted last round, because
             # we know we were the perpetrator (and we already reset the
             # hostility belief regarding the target)
             if self.last_acted == self.model.schedule.time - 1:
+                continue
+
+            # if we don't have previous beliefs about this neighbour's
+            # capabilities, we can't say if it has been destroyed
+            if neighbour not in old_tech_beliefs:
                 continue
 
             # calculate probability that the neighbour was destroyed, i.e.
@@ -174,9 +183,12 @@ class Civilisation(mesa.Agent):
             return
 
         self.dprint(f"Updating hostility beliefs because",
-                    f"{destroyed_civilisation.unique_id} was destroyed")
+                    f"{destroyed_civilisation} was destroyed")
+
+        # reset our belief about the hostility of the destroyed civilisation
         new_hostility_beliefs[destroyed_civilisation] = self.model.hostility_belief_prior
 
+        # tech level of destroyed civilisation
         destr_tech_level = old_tech_beliefs[destroyed_civilisation]
 
         # calculate the capabilities of all neighbours
@@ -192,8 +204,6 @@ class Civilisation(mesa.Agent):
             if perpetrator not in old_tech_beliefs:
                 continue
 
-            assert(perpetrator in old_hostility_beliefs)
-
             perpetrator_tech_level = old_tech_beliefs[perpetrator]
 
             # tech level required for perpetrator to be able to reach the
@@ -208,21 +218,21 @@ class Civilisation(mesa.Agent):
             prob_capable = prob_smaller(lambda size: np.maximum(
                                             destr_tech_level.rvs(size=size), 
                                             req_tech_level),
-                                        perpetrator_tech_level.rvs, 
-                                        include_equal=True)
+                                         perpetrator_tech_level.rvs, 
+                                         include_equal=True)
             perp_values[perpetrator] = (prob_capable, 
                                         old_hostility_beliefs[perpetrator])
 
         # calculate the updated hostility beliefs
         if len(perp_values) > 0:
-            denominator = np.sum([c*h for perp, (c, h) in perp_values.items()])
+            denominator = sum([c*h for perp, (c, h) in perp_values.items()])
 
             if denominator > 0:
                 new_hostility_beliefs.update({perp: h + c*h/denominator - c*h**2 / denominator 
                                               for perp, (c, h) in perp_values.items()})
 
                 self.dprint(f"New hostility beliefs:", 
-                    *(f"{agent.unique_id}: {old_hostility_beliefs[agent]:.3f} -> {new_belief:.3f}" 
+                    *(f"{agent}: {old_hostility_beliefs[agent]:.3f} -> {new_belief:.3f}" 
                       for agent, new_belief in new_hostility_beliefs.items() 
                       if agent in old_hostility_beliefs))
             else:
@@ -256,7 +266,7 @@ class Civilisation(mesa.Agent):
             actions = neighbours + ['no action']
             if self.visibility_factor == 1:
                 actions += ['hide']
-            action = self.random.choice(actions)
+            action = self.rng.choice(actions)
 
         elif self.decision_making == "targeted":
 
@@ -281,10 +291,10 @@ class Civilisation(mesa.Agent):
             else:
 
                 # random attack with 10% probability
-                if len(neighbours) > 0 and self.random.random() < 0.1:
-                    action = self.random.choice(neighbours)
+                if len(neighbours) > 0 and self.rng.random() < 0.1:
+                    action = self.rng.choice(neighbours)
                 else:
-                    action = self.random.choice(['hide', 'no action'])
+                    action = self.rng.choice(['hide', 'no action'])
 
             
         if isinstance(action, Civilisation):
@@ -311,7 +321,7 @@ class Civilisation(mesa.Agent):
         """
         if (attacker.tech_level > self.tech_level or 
             (attacker.tech_level == self.tech_level and
-             self.model.random.random() > 0.5)):
+             self.rng.random() > 0.5)):
 
             # civilisation is destroyed
             self.reset_time = self.model.schedule.time
@@ -351,12 +361,18 @@ class Civilisation(mesa.Agent):
         if self.model.debug:
             print(f"t={self.model.schedule.time}, {self.unique_id}:", *message)
 
+    def __str__(self):
+        return f"{self.unique_id}"
+
 class Universe(mesa.Model):
 
     def __init__(self, num_agents, toroidal_space=False, 
                  agent_growth=sigmoid_growth, decision_making="random", 
-                 hostility_belief_prior=0.01, debug=False) -> None:
+                 hostility_belief_prior=0.01, debug=False, rng_seed=0) -> None:
         
+        # initialise random number generator
+        self.rng = np.random.default_rng(rng_seed)
+
         # initialise schedule and space
         self.schedule = SingleActivation(self, 
                                          update_methods=['step_tech_level', 
@@ -373,7 +389,7 @@ class Universe(mesa.Model):
 
             # place agent in a randomly chosen position
             # TODO: consider the distribution of stars
-            x, y = self.random.random(), self.random.random()
+            x, y = self.rng.random(size=2)
             self.space.place_agent(agent, (x, y))
 
         # initialise data collection
@@ -440,7 +456,7 @@ class SingleActivation(mesa.time.BaseScheduler):
             agent_keys = list(self._agents.keys())
 
         # finally, choose a random agent to step
-        agent = self.model.random.choice(agent_keys)
+        agent = self.model.rng.choice(agent_keys)
         getattr(self._agents[agent], self.step_method)()
 
         # increase time
