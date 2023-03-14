@@ -10,8 +10,10 @@ from tqdm import tqdm
 # parameters
 params = {'decision_making': 'targeted',
           'hostility_belief_prior': 0.1,
-          'num_agents': 10}
-num_steps = 50
+          'num_agents': 20, 
+          'speed_range': (4,10),
+          'takeoff_time_range': (10, 100)}
+num_steps = 1000
 
 # create a universe
 model = Universe(debug=False, **params)

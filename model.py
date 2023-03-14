@@ -23,7 +23,11 @@ def sigmoid_growth(time, speed, takeoff_time):
     sigmoid-shaped growing curve for the technological capabilities of
     civilisations.
     """
-    return 1/(1+np.exp(-speed*(time - takeoff_time)))
+    exponent = -speed * (time - takeoff_time)
+    # avoid overflows in exp
+    if exponent > 10:
+        return 0
+    return 1/(1+np.exp(exponent))
 
 def prob_smaller(rv1, rv2, n_samples=100, include_equal=False):
     """
@@ -59,8 +63,22 @@ class TechBelief():
 class Civilisation(mesa.Agent):
     """An agent represeting a single civilisation in the universe"""
 
-    def __init__(self, unique_id, model, growth, decision_making, 
+    def __init__(self, unique_id, model, decision_making, growth, 
                  **growth_kwargs) -> None:
+        """
+        Initialise a civilisation.
+
+        Keyword arguments:
+        unique_id: integer, uniquely identifies this civilisation
+        model: a Universe object which this civilisation belongs to
+        decision_making: either "random" or "targeted" (see step_act for their
+                         meaning)
+        growth: a callable of the form growth(time, **growth_kwargs)
+        **growth_kwargs: keyword arguments to the growth function. Can also
+                         supply speed_range and takeoff_time_range in case 
+                         growth if sigmoid_growth, in which case the speed
+                         and takeoff time are randomly chosen from these ranges
+        """
         super().__init__(unique_id, model)
 
         # add reference to model's rng
@@ -79,10 +97,24 @@ class Civilisation(mesa.Agent):
         # civilisation destroyed another
         self.last_acted = -1
 
-        # by default, choose growth parameters randomly
-        if len(growth_kwargs) < 1 and growth==sigmoid_growth:
-            growth_kwargs = {'speed': self.rng.uniform(2, 4),
-                             'takeoff_time': self.rng.integers(1, 20)}
+        if (growth == sigmoid_growth and 
+            "speed" not in growth_kwargs and 
+            "takeoff_time" not in growth_kwargs):
+            # for sigmoid growth, parameters are chosen randomly from given
+            # ranges
+
+            if len(growth_kwargs) == 0:
+                speed_range = (2, 4)
+                takeoff_time_range = (1, 20)
+            elif "speed_range" in growth_kwargs and "takeoff_time_range" in growth_kwargs:
+                speed_range = growth_kwargs["speed_range"]
+                takeoff_time_range = growth_kwargs["takeoff_time_range"]
+            else:
+                raise Exception("Sigmoid growth parameters are incorrect")
+
+            growth_kwargs = {'speed': self.rng.uniform(*speed_range),
+                             'takeoff_time': self.rng.integers(
+                                        *takeoff_time_range, endpoint=True)}
         
         # save parameters
         self.growth = lambda time: growth(time, **growth_kwargs)
@@ -368,7 +400,8 @@ class Universe(mesa.Model):
 
     def __init__(self, num_agents, toroidal_space=False, 
                  agent_growth=sigmoid_growth, decision_making="random", 
-                 hostility_belief_prior=0.01, debug=False, rng_seed=0) -> None:
+                 hostility_belief_prior=0.01, debug=False, rng_seed=0, 
+                 **agent_growth_kwargs) -> None:
         
         # initialise random number generator
         self.rng = np.random.default_rng(rng_seed)
@@ -383,8 +416,9 @@ class Universe(mesa.Model):
 
         # add agents
         for i in range(num_agents):
-            agent = Civilisation(i, self, agent_growth, 
-                                 decision_making=decision_making)
+            agent = Civilisation(i, self, growth=agent_growth, 
+                                 decision_making=decision_making,
+                                 **agent_growth_kwargs)
             self.schedule.add(agent)
 
             # place agent in a randomly chosen position
