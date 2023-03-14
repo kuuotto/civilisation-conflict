@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from matplotlib.animation import ArtistAnimation
 from model import TechBelief
+from analyse import count_streaks
 
 def draw_universe(model=None, data=None, attack_data=None, colormap=mpl.colormaps['Dark2']):
     """
@@ -172,15 +173,16 @@ def plot_technology_distribution_step(data, step, normalise=False):
     ax.set_title(f"Technology Level Distribution at t={step}")
     plt.show()
 
-def plot_technology_distribution(data):
+def plot_technology_distribution(data, **params):
     """
     Plot the technology level distribution over time as a heat map.
 
     Parameters:
     data: an agent data Pandas DataFrame collected by the model datacollector
+    **params: model parameter values used for the simulation. These will be
+              displayed under the plot as a caption.
     """
-
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(constrained_layout=True, figsize=(5,5))
     tech_levels = TechBelief.support()
     steps = data.index.get_level_values("Step").unique()
 
@@ -195,7 +197,7 @@ def plot_technology_distribution(data):
 
         dist_array[:, step] = list(dist.values())
 
-    im = ax.imshow(im, interpolation="nearest", origin="lower", 
+    im = ax.imshow(dist_array, interpolation="nearest", origin="lower", 
                    extent=(0, max(steps), 0, max(tech_levels)),
                    aspect="auto")
     fig.colorbar(im, label="frequency")
@@ -203,5 +205,35 @@ def plot_technology_distribution(data):
     ax.set_title("Distribution of Technology Levels")
     ax.set_xlabel('Time')
     ax.set_ylabel("Technology Level")
+    fig.supxlabel("\n".join([f"{k}: {v}" for k, v in params.items()]))
+
+    plt.show()
+
+def plot_streak_length_distribution(attack_data, **params):
+    """
+    Visualise distribution of attack streak lengths on a log-log scale.
+    An attack streak is defined as successive time steps when an attack occurs
+    (whether successful or not).
+
+    Parameters:
+    attack_data: a pandas DataFrame collected by the model datacollector
+    **params: model parameter values used for the simulation. These will be
+              displayed under the plot as a caption.
+    """
+    fig, ax = plt.subplots(constrained_layout=True, figsize=(5,5))
+
+    # count streaks
+    streaks = count_streaks(attack_data['time'])
+    
+    # visualise
+    ax.scatter(x=list(streaks.keys()), y=list(streaks.values()))
+
+    ax.set_yscale('log')
+    ax.set_xscale('log')
+    ax.set_xlabel("Attack Streak Length")
+    ax.set_ylabel("Frequency")
+    ax.set_title("Distribution of Attack Streak Lengths")
+    ax.grid()
+    fig.supxlabel("\n".join([f"{k}: {v}" for k, v in params.items()]))
 
     plt.show()
