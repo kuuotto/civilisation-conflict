@@ -3,8 +3,6 @@ import numpy as np
 from scipy.stats import binom
 import mesa
 
-# %%
-
 def influence_radius(tech_level):
     """
     Gives the radius of influence as a function of the technology level
@@ -383,6 +381,7 @@ class Universe(mesa.Model):
             agent_reporters={
                 "Technology": "tech_level", 
                 "Radius of Influence": "influence_radius",
+                "Visibility Factor": "visibility_factor",
                 "Position": "pos"
             }, 
             tables={'attacks': ['time', 'attacker', 'target', 'successful']})

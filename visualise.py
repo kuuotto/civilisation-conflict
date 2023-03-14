@@ -1,3 +1,5 @@
+# %%
+
 import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -64,8 +66,11 @@ def draw_universe(model=None, data=None, attack_data=None, colormap=mpl.colormap
         x = [pos[0] for pos in positions]
         y = [pos[1] for pos in positions]
         colors = [colormap(id % 5) for id in ids]
+        facecolors = [c[:3] + (v,) for c, v in zip(
+                            colors, universal_agent_data['Visibility Factor'])]
 
-        paths = ax.scatter(x, y, c=colors, s=7**2, marker="d")
+        paths = ax.scatter(x, y, edgecolors=colors, s=50, marker="d",
+                           facecolor=facecolors)
         step_artists.append(paths)
 
         ### draw other agents, showing their radius of influence
@@ -75,9 +80,11 @@ def draw_universe(model=None, data=None, attack_data=None, colormap=mpl.colormap
         x = [pos[0] for pos in positions]
         y = [pos[1] for pos in positions]
         colors = [colormap(id % 5) for id in ids]
+        facecolors = [c[:3] + (v,) for c, v in zip(
+                            colors, normal_agent_data['Visibility Factor'])]
         influence_radii = normal_agent_data['Radius of Influence']
 
-        paths = ax.scatter(x, y, c=colors, s=3**2)
+        paths = ax.scatter(x, y, edgecolors=colors, facecolors=facecolors, s=20)
         step_artists.append(paths)
 
         # draw circles indicating influence radii
