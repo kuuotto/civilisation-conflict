@@ -295,7 +295,7 @@ class Civilisation(mesa.Agent):
         """
         neighbours = self.get_neighbouring_agents()
 
-
+        ### Choose an action
         if self.decision_making == "random":
 
             actions = neighbours + ['no action']
@@ -331,17 +331,31 @@ class Civilisation(mesa.Agent):
                 else:
                     action = self.rng.choice(['hide', 'no action'])
 
-            
+        ### Perform and log action
         if isinstance(action, Civilisation):
             self.dprint(f"Attacks {action.unique_id}")
             action.attack(self)
+
         elif action=="hide":
             # TODO: define hiding more rigorously
             self.visibility_factor *= 0.7
+
             self.dprint(f"Hides (tech level {self.tech_level},",
                         f"visibility {self.visibility_factor:.3f})")
+            self.model.datacollector.add_table_row('actions',
+                {'time': self.model.schedule.time,
+                 'actor': self.unique_id,
+                 'action': 'h'}, 
+                ignore_missing=True)
+                
         elif action == "no action" or action == "hide":
             self.dprint("-")
+            # log
+            self.model.datacollector.add_table_row('actions',
+                {'time': self.model.schedule.time,
+                 'actor': self.unique_id,
+                 'action': '-'}, 
+                ignore_missing=True)
 
         # update last acted time
         self.last_acted = self.model.schedule.time
@@ -381,11 +395,12 @@ class Civilisation(mesa.Agent):
             result = False
 
         # log attack
-        self.model.datacollector.add_table_row('attacks',
+        self.model.datacollector.add_table_row('actions',
             {'time': self.model.schedule.time,
-             'attacker': attacker.unique_id,
-             'target': self.unique_id,
-             'successful': result})
+             'actor': attacker.unique_id,
+             'action': 'a',
+             'attack_target': self.unique_id,
+             'attack_successful': result})
 
     def get_neighbouring_agents(self):
         return self.model.space.get_neighbors(pos=self.pos, 
@@ -438,7 +453,8 @@ class Universe(mesa.Model):
                 "Visibility Factor": "visibility_factor",
                 "Position": "pos"
             }, 
-            tables={'attacks': ['time', 'attacker', 'target', 'successful']})
+            tables={'actions': ['time', 'actor', 'action', 'attack_target', 
+                                'attack_successful']})
 
         # save parameters
         self.debug = debug

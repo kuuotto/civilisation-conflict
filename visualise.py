@@ -9,14 +9,28 @@ from matplotlib.animation import ArtistAnimation
 from model import TechBelief
 from analyse import count_streaks
 
-def draw_universe(model=None, data=None, attack_data=None, colormap=mpl.colormaps['Dark2']):
+def draw_universe(model=None, data=None, action_data=None, 
+                  colormap=mpl.colormaps['Dark2'], anim_filename=None,
+                  anim_length=60):
     """
+    Visualise the model simulation.
+
     If given a model, draw the current configuration of the universe
-    in the model.
+    in the model. 
     If given data with a single timestep, draw the configuration of the
     universe in the data.
     If given data with multiple timesteps, draw an animation of the 
     configurations in the data.
+
+    Keyword arguments:
+    model: a Universe object
+    data: data (a pandas DataFrame) from the model datacollector
+    action_data: action data (a pandas DataFrame) from the model datacollector
+    colormap: color scheme for coloring the agent symbols (different colors
+              don't have any meaning besides making it easier to distinguish 
+              agents)
+    anim_filename: if a string is supplied, the animation is saved to this path
+    anim_length: desired length of animation (in seconds)
     """
 
     if model:
@@ -27,10 +41,12 @@ def draw_universe(model=None, data=None, attack_data=None, colormap=mpl.colormap
         ids = [agent.unique_id for agent in agents]
         tech_levels = [agent.tech_level for agent in agents]
         influence_radii = [agent.influence_radius for agent in agents]
+        visibility_factors = [agent.visibility_factor for agent in agents]
         positions = [agent.pos for agent in agents]
 
         data = pd.DataFrame({'Technology': tech_levels,
                              'Radius of Influence': influence_radii,
+                             'Visibility Factor': visibility_factors,
                              'Position': positions},
                             index=pd.MultiIndex.from_tuples(
                                 [(steps[0], id) for id in ids], 
@@ -96,28 +112,51 @@ def draw_universe(model=None, data=None, attack_data=None, colormap=mpl.colormap
                                         alpha=0.1, color=color))
             step_artists.append(patch)
 
+        # if action data is supplied, draw arrows indicating attacks
+        # and circles indicating turns to move
+        if isinstance(action_data, pd.DataFrame) and step in action_data.time.values:
+
+            step_action_data = action_data[action_data.time == step]
+
+            # draw a circle around the actor
+            actor_id = step_action_data.actor
+            actor_pos = step_data.loc[actor_id].Position.values[0]
+            circle = ax.add_patch(Circle(actor_pos, radius=0.03, alpha=0.5, 
+                                         linestyle='dashed', edgecolor='white',
+                                         facecolor='none'))
+            step_artists.append(circle)
+
+            # if action is an attack, draw an arrow
+            if step_action_data['action'].values[0] == 'a':
+                target_id = step_action_data['attack_target']
+
+                a_x, a_y = actor_pos
+                t_x, t_y = step_data.loc[target_id].Position.values[0]
+
+                arrow = ax.arrow(x=a_x, y=a_y, dx=t_x - a_x, dy=t_y - a_y, 
+                                length_includes_head=True, width=0.005,
+                                head_width=0.03, head_length=0.03, color="white")
+                step_artists.append(arrow)
+
         artists.append(step_artists)
-
-        # draw arrows indicating attacks
-        if isinstance(attack_data, pd.DataFrame) and step in attack_data.time.values:
-
-            step_attack_data = attack_data[attack_data.time == step]
-            attacker_id, target_id = step_attack_data['attacker'], step_attack_data['target']
-
-            a_x, a_y = step_data.loc[attacker_id].Position.values[0]
-            t_x, t_y = step_data.loc[target_id].Position.values[0]
-
-            arrow = ax.arrow(x=a_x, y=a_y, dx=t_x - a_x, dy=t_y - a_y, 
-                             length_includes_head=True, width=0.005,
-                             color="white")
-            step_artists.append(arrow)
 
     # revert back to default style
     plt.style.use("default")
 
     # if there are multiple steps, animate
     if len(steps) > 1:
-        ani = ArtistAnimation(fig=fig, artists=artists, interval=800, repeat=True)
+
+        # determine interval from desired animation length
+        interval = int(anim_length * 1000 / len(steps))
+
+        # create animation
+        ani = ArtistAnimation(fig=fig, artists=artists, interval=interval, 
+                              repeat=True)
+
+        # save to a file if requested
+        if anim_filename:
+            ani.save(anim_filename)
+
         return ani
 
     return fig, ax
@@ -216,21 +255,21 @@ def plot_technology_distribution(data, **params):
 
     plt.show()
 
-def plot_streak_length_distribution(attack_data, **params):
+def plot_streak_length_distribution(action_data, **params):
     """
     Visualise distribution of attack streak lengths on a log-log scale.
     An attack streak is defined as successive time steps when an attack occurs
     (whether successful or not).
 
     Parameters:
-    attack_data: a pandas DataFrame collected by the model datacollector
+    action_data: a pandas DataFrame collected by the model datacollector
     **params: model parameter values used for the simulation. These will be
               displayed under the plot as a caption.
     """
     fig, ax = plt.subplots(constrained_layout=True, figsize=(5,5))
 
     # count streaks
-    streaks = count_streaks(attack_data['time'])
+    streaks = count_streaks(action_data[action_data.action == 'a']['time'].values)
     
     # visualise
     ax.scatter(x=list(streaks.keys()), y=list(streaks.values()))

@@ -1,6 +1,5 @@
 # %%
 from model import Universe
-from analyse import count_streaks
 from visualise import (draw_universe, plot_technology_distribution, 
                        plot_streak_length_distribution)
 import matplotlib.pyplot as plt
@@ -24,13 +23,15 @@ for i in tqdm(range(params["num_steps"])):
 
 # retrieve data
 data = model.datacollector.get_agent_vars_dataframe() 
-attack_data = model.datacollector.get_table_dataframe("attacks")
+action_data = model.datacollector.get_table_dataframe("actions")
 
 # %% Visualise model run
-vis = draw_universe(data=data, attack_data=attack_data)
+vis = draw_universe(data=data, action_data=action_data, 
+                    anim_filename="output.mp4", 
+                    anim_length=60)
 plt.show()
 
 # %% Diagnostic plots
 plot_technology_distribution(data, **params)
-plot_streak_length_distribution(attack_data, **params)
+plot_streak_length_distribution(action_data, **params)
 
