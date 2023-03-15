@@ -9,14 +9,28 @@ from matplotlib.animation import ArtistAnimation
 from model import TechBelief
 from analyse import count_streaks
 
-def draw_universe(model=None, data=None, attack_data=None, colormap=mpl.colormaps['Dark2']):
+def draw_universe(model=None, data=None, attack_data=None, 
+                  colormap=mpl.colormaps['Dark2'], anim_filename=None,
+                  anim_length=60):
     """
+    Visualise the model simulation.
+
     If given a model, draw the current configuration of the universe
-    in the model.
+    in the model. 
     If given data with a single timestep, draw the configuration of the
     universe in the data.
     If given data with multiple timesteps, draw an animation of the 
     configurations in the data.
+
+    Keyword arguments:
+    model: a Universe object
+    data: data (a pandas DataFrame) from the model datacollector
+    attack_data: attack data (a pandas DataFrame) from the model datacollector
+    colormap: color scheme for coloring the agent symbols (different colors
+              don't have any meaning besides making it easier to distinguish 
+              agents)
+    anim_filename: if a string is supplied, the animation is saved to this path
+    anim_length: desired length of animation (in seconds)
     """
 
     if model:
@@ -27,10 +41,12 @@ def draw_universe(model=None, data=None, attack_data=None, colormap=mpl.colormap
         ids = [agent.unique_id for agent in agents]
         tech_levels = [agent.tech_level for agent in agents]
         influence_radii = [agent.influence_radius for agent in agents]
+        visibility_factors = [agent.visibility_factor for agent in agents]
         positions = [agent.pos for agent in agents]
 
         data = pd.DataFrame({'Technology': tech_levels,
                              'Radius of Influence': influence_radii,
+                             'Visibility Factor': visibility_factors,
                              'Position': positions},
                             index=pd.MultiIndex.from_tuples(
                                 [(steps[0], id) for id in ids], 
@@ -109,7 +125,7 @@ def draw_universe(model=None, data=None, attack_data=None, colormap=mpl.colormap
 
             arrow = ax.arrow(x=a_x, y=a_y, dx=t_x - a_x, dy=t_y - a_y, 
                              length_includes_head=True, width=0.005,
-                             color="white")
+                             head_width=0.03, head_length=0.03, color="white")
             step_artists.append(arrow)
 
     # revert back to default style
@@ -117,7 +133,18 @@ def draw_universe(model=None, data=None, attack_data=None, colormap=mpl.colormap
 
     # if there are multiple steps, animate
     if len(steps) > 1:
-        ani = ArtistAnimation(fig=fig, artists=artists, interval=800, repeat=True)
+
+        # determine interval from desired animation length
+        interval = int(anim_length * 1000 / len(steps))
+
+        # create animation
+        ani = ArtistAnimation(fig=fig, artists=artists, interval=interval, 
+                              repeat=True)
+
+        # save to a file if requested
+        if anim_filename:
+            ani.save(anim_filename)
+
         return ani
 
     return fig, ax

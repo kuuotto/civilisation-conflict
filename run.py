@@ -1,6 +1,5 @@
 # %%
 from model import Universe
-from analyse import count_streaks
 from visualise import (draw_universe, plot_technology_distribution, 
                        plot_streak_length_distribution)
 import matplotlib.pyplot as plt
@@ -27,7 +26,8 @@ data = model.datacollector.get_agent_vars_dataframe()
 attack_data = model.datacollector.get_table_dataframe("attacks")
 
 # %% Visualise model run
-vis = draw_universe(data=data, attack_data=attack_data)
+vis = draw_universe(data=data, attack_data=attack_data, 
+                    anim_filename="output.mp4", anim_length=60)
 plt.show()
 
 # %% Diagnostic plots
