@@ -360,9 +360,10 @@ class Civilisation(mesa.Agent):
 
             # civilisation is destroyed
             self.reset_time = self.model.schedule.time
+            self.step_tech_level()
             self.visibility_factor = 1
             # tech and hostility beliefs will be reset at the beginning
-            # of the next round
+            # of the next round, because we will have no neighbours
 
             # attacker gets to know that the target was destroyed.
             # in particular, it resets its hostility beliefs
