@@ -150,7 +150,11 @@ def get_technology_distribution_step(data, step, normalise=False):
 
     return dist
 
-def plot_technology_distribution_step(data, step, normalise=False):
+def _get_caption(**params):
+    """Generate a caption from model parameters"""
+    return "\n".join([f"{k}: {v}" for k, v in params.items()])
+
+def plot_technology_distribution_step(data, step, normalise=False, **params):
     """
     Plot the technology level distribution at the given time step.
 
@@ -158,9 +162,11 @@ def plot_technology_distribution_step(data, step, normalise=False):
     data: an agent data Pandas DataFrame collected by the model datacollector
     step: an integer, pointing the step in data which to visualise
     normalise: whether to normalise the frequency distribution
+    **params: model parameter values used for the simulation. These will be
+              displayed under the plot as a caption.
     """
     # initialise figure
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(constrained_layout=True, figsize=(5,5))
 
     # calculate distribution
     dist = get_technology_distribution_step(data=data, step=step, 
@@ -171,6 +177,7 @@ def plot_technology_distribution_step(data, step, normalise=False):
     ax.set_xlabel("Technology Level")
     ax.set_ylabel("Frequency")
     ax.set_title(f"Technology Level Distribution at t={step}")
+    fig.supxlabel(_get_caption(**params))
     plt.show()
 
 def plot_technology_distribution(data, **params):
@@ -205,7 +212,7 @@ def plot_technology_distribution(data, **params):
     ax.set_title("Distribution of Technology Levels")
     ax.set_xlabel('Time')
     ax.set_ylabel("Technology Level")
-    fig.supxlabel("\n".join([f"{k}: {v}" for k, v in params.items()]))
+    fig.supxlabel(_get_caption(**params))
 
     plt.show()
 
@@ -234,6 +241,6 @@ def plot_streak_length_distribution(attack_data, **params):
     ax.set_ylabel("Frequency")
     ax.set_title("Distribution of Attack Streak Lengths")
     ax.grid()
-    fig.supxlabel("\n".join([f"{k}: {v}" for k, v in params.items()]))
+    fig.supxlabel(_get_caption(**params))
 
     plt.show()
