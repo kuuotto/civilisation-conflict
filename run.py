@@ -1,48 +1,36 @@
 # %%
 from model import Universe
 from analyse import count_streaks
-from visualise import draw_universe
+from visualise import (draw_universe, plot_technology_distribution, 
+                       plot_streak_length_distribution)
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-# %%
+# %% Run model and gather data
 
 # parameters
-params = {'decision_making': 'targeted',
+params = {'num_steps': 500,
+          'num_agents': 20,
+          'decision_making': 'targeted',
           'hostility_belief_prior': 0.1,
-          'num_agents': 20, 
-          'speed_range': (4,10),
+          'speed_range': (0.3, 1),
           'takeoff_time_range': (10, 100)}
-num_steps = 1000
 
 # create a universe
 model = Universe(debug=False, **params)
 # simulate
-for i in tqdm(range(num_steps)):
+for i in tqdm(range(params["num_steps"])):
     model.step()
 
-# retrieve and visualise data
+# retrieve data
 data = model.datacollector.get_agent_vars_dataframe() 
 attack_data = model.datacollector.get_table_dataframe("attacks")
+
+# %% Visualise model run
 vis = draw_universe(data=data, attack_data=attack_data)
 plt.show()
 
-
-# %%
-
-# visualise streak length distribution
-streaks = count_streaks(attack_data['time'])
-fig, ax = plt.subplots()
-ax.scatter(x=list(streaks.keys()), y=list(streaks.values()))
-ax.set_yscale('log')
-ax.set_xscale('log')
-ax.set_xlabel("Attack streak length")
-ax.set_ylabel("Frequency")
-ax.set_title((f"{params['decision_making']}, " + 
-              f"{params['num_agents']} civilisations, " + 
-              f"{num_steps} steps, " 
-              f"hostility belief prior {params['hostility_belief_prior']}"))
-ax.grid()
-#fig.savefig("fig.pdf")
-plt.show()
+# %% Diagnostic plots
+plot_technology_distribution(data, **params)
+plot_streak_length_distribution(attack_data, **params)
 

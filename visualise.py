@@ -1,10 +1,13 @@
 # %%
 
+import numpy as np
 import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from matplotlib.animation import ArtistAnimation
+from model import TechBelief
+from analyse import count_streaks
 
 def draw_universe(model=None, data=None, attack_data=None, colormap=mpl.colormaps['Dark2']):
     """
@@ -118,3 +121,126 @@ def draw_universe(model=None, data=None, attack_data=None, colormap=mpl.colormap
         return ani
 
     return fig, ax
+
+def get_technology_distribution_step(data, step, normalise=False):
+    """
+    Determine the technology level distribution at the given time step.
+
+    Parameters:
+    data: an agent data Pandas DataFrame collected by the model datacollector
+    step: an integer, pointing the step in the data which to use
+    normalise: whether to return a properly normalised probability distribution
+               (True) or counts (False)
+
+    Returns:
+    a dictionary where keys are technology values and values are either
+    absolute or relative frequencies (depending on the value of the normalise
+    parameter) 
+    """
+
+    # initialise distribution
+    dist = {tech: 0 for tech in TechBelief.support()}
+
+    # collect data and update distribution
+    step_data = data.xs(step, level="Step")['Technology']
+    values, frequencies = np.unique(step_data, return_counts=True)
+    if normalise and sum(frequencies) > 0:
+        frequencies = frequencies / sum(frequencies)
+    dist.update({v: f for v, f in zip(values, frequencies)})
+
+    return dist
+
+def _get_caption(**params):
+    """Generate a caption from model parameters"""
+    return "\n".join([f"{k}: {v}" for k, v in params.items()])
+
+def plot_technology_distribution_step(data, step, normalise=False, **params):
+    """
+    Plot the technology level distribution at the given time step.
+
+    Parameters:
+    data: an agent data Pandas DataFrame collected by the model datacollector
+    step: an integer, pointing the step in data which to visualise
+    normalise: whether to normalise the frequency distribution
+    **params: model parameter values used for the simulation. These will be
+              displayed under the plot as a caption.
+    """
+    # initialise figure
+    fig, ax = plt.subplots(constrained_layout=True, figsize=(5,5))
+
+    # calculate distribution
+    dist = get_technology_distribution_step(data=data, step=step, 
+                                            normalise=normalise)
+
+    # draw
+    ax.stem(dist.keys(), dist.values())
+    ax.set_xlabel("Technology Level")
+    ax.set_ylabel("Frequency")
+    ax.set_title(f"Technology Level Distribution at t={step}")
+    fig.supxlabel(_get_caption(**params))
+    plt.show()
+
+def plot_technology_distribution(data, **params):
+    """
+    Plot the technology level distribution over time as a heat map.
+
+    Parameters:
+    data: an agent data Pandas DataFrame collected by the model datacollector
+    **params: model parameter values used for the simulation. These will be
+              displayed under the plot as a caption.
+    """
+    fig, ax = plt.subplots(constrained_layout=True, figsize=(5,5))
+    tech_levels = TechBelief.support()
+    steps = data.index.get_level_values("Step").unique()
+
+    # initialise array
+    dist_array = np.zeros((len(tech_levels), len(steps)))
+
+    for step in steps:
+
+        # calculate distribution on this step
+        dist = get_technology_distribution_step(data=data, step=step, 
+                                                normalise=True)
+
+        dist_array[:, step] = list(dist.values())
+
+    im = ax.imshow(dist_array, interpolation="nearest", origin="lower", 
+                   extent=(0, max(steps), 0, max(tech_levels)),
+                   aspect="auto")
+    fig.colorbar(im, label="frequency")
+
+    ax.set_title("Distribution of Technology Levels")
+    ax.set_xlabel('Time')
+    ax.set_ylabel("Technology Level")
+    fig.supxlabel(_get_caption(**params))
+
+    plt.show()
+
+def plot_streak_length_distribution(attack_data, **params):
+    """
+    Visualise distribution of attack streak lengths on a log-log scale.
+    An attack streak is defined as successive time steps when an attack occurs
+    (whether successful or not).
+
+    Parameters:
+    attack_data: a pandas DataFrame collected by the model datacollector
+    **params: model parameter values used for the simulation. These will be
+              displayed under the plot as a caption.
+    """
+    fig, ax = plt.subplots(constrained_layout=True, figsize=(5,5))
+
+    # count streaks
+    streaks = count_streaks(attack_data['time'])
+    
+    # visualise
+    ax.scatter(x=list(streaks.keys()), y=list(streaks.values()))
+
+    ax.set_yscale('log')
+    ax.set_xscale('log')
+    ax.set_xlabel("Attack Streak Length")
+    ax.set_ylabel("Frequency")
+    ax.set_title("Distribution of Attack Streak Lengths")
+    ax.grid()
+    fig.supxlabel(_get_caption(**params))
+
+    plt.show()
