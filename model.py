@@ -211,14 +211,15 @@ class Civilisation(mesa.Agent):
                                  for neighbour in neighbours}
 
 
-        # if there are no civilisations that we are very confident have been
-        # destroyed, don't update hostility beliefs
-        if not destroyed_civilisation or max_prob_destr < 0.9:
+        # the civilisation with the highest probability of having been
+        # destroyed is deemed destroyed stochastically with that probability
+        if not destroyed_civilisation or self.rng.random() > max_prob_destr:
             self.hostility_beliefs = new_hostility_beliefs
             return
 
         self.dprint(f"Updating hostility beliefs because",
-                    f"{destroyed_civilisation} was destroyed")
+                    f"{destroyed_civilisation} was destroyed",
+                    f"(prob. {max_prob_destr:.3f})")
 
         # reset our belief about the hostility of the destroyed civilisation
         new_hostility_beliefs[destroyed_civilisation] = self.model.hostility_belief_prior
