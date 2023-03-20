@@ -45,6 +45,65 @@ def prob_smaller(rv1, rv2, n_samples=100, include_equal=False):
     return np.mean(sample1 <= sample2) if include_equal else np.mean(sample1 < sample2)
 
 
+def transition(model, action):
+    """
+    Given a model in a given state and an action, this function produces all 
+    the possible future states and the associated probabilities.
+
+    Keyword arguments:
+    model: a Universe object
+    action: a dictionary, with keys 'actor' (a Civilisation) and 'type'
+            (either a string ('hide' for hiding or '-' for no action) or a 
+             Civilisation that was attacked)
+
+    Returns: two tuples, the first for possible new states (represented as 
+             NumPy arrays) and the second for the associated probabilities
+    """
+    # get current state as a n x k NumPy array
+    state = model.get_state().copy()
+
+    # always tick everyone's time by one
+    state[:, 0] += 1
+    
+    if action['type'] == '-' or action['type'] == 'hide':
+
+        if action['type'] == 'hide':
+            # if actor hides, additionally update their visibility
+            state[action['actor'].unique_id, 1] *= model.visibility_multiplier
+            
+        result_states = (state,)
+        result_state_probs = (1,)
+
+    elif isinstance(action['type'], Civilisation):
+        # if there is an attack, see if it is successful or not
+        target = action['type']
+
+        # create states corresponding to the target surviving or dying
+        # TODO: room for optimisation
+        survived_state = state
+        destroyed_state = state.copy()
+        destroyed_state[target.unique_id, 0] = 0 # reset time
+        destroyed_state[target.unique_id, 1] = 1 # visibility factor
+
+        if action['actor'].tech_level > target.tech_level:
+            # civilisation is destroyed
+            result_states = (destroyed_state,)
+            result_state_probs = (1,)
+        elif action['actor'].tech_level == target.tech_level:
+            # if the civilisations are evenly matched, the target is destroyed
+            # with a 50% probability
+            result_states = (survived_state, destroyed_state)
+            result_state_probs = (0.5, 0.5)
+        else:
+            # target civilisation is not destroyed
+            result_states = (survived_state,)
+            result_state_probs = (1,)
+
+    else:
+        raise Exception(f"Action format was incorrect: {action}")
+
+    return result_states, result_state_probs
+
 class TechBelief():
     """Helper class for converting distributions into the range [0,1]"""
 
@@ -66,7 +125,7 @@ class TechBelief():
 class Civilisation(mesa.Agent):
     """An agent represeting a single civilisation in the universe"""
 
-    def __init__(self, unique_id, model, decision_making, growth, 
+    def __init__(self, unique_id, model, decision_making, growth,
                  **growth_kwargs) -> None:
         """
         Initialise a civilisation.
@@ -120,7 +179,8 @@ class Civilisation(mesa.Agent):
                                         *takeoff_time_range, endpoint=True)}
         
         # save parameters
-        self.growth = lambda time: growth(time, **growth_kwargs)
+        self.growth = growth
+        self.growth_kwargs = growth_kwargs
         self.decision_making = decision_making
     
         # initialise own tech level
@@ -131,12 +191,16 @@ class Civilisation(mesa.Agent):
 
         # initialise a dictionary of neighbour hostility beliefs
         self.hostility_beliefs = dict()
-        
 
+        # initialise own state (see a description of the state in the 
+        # get_state method)
+        self._init_state()
+        
     def step_tech_level(self):
         """Update own tech level"""
         # tech level is discretised
-        new_tech_level = self.growth(self.model.schedule.time - self.reset_time)
+        new_tech_level = self.growth(self.model.schedule.time - self.reset_time, 
+                                     **self.growth_kwargs)
         new_tech_level = np.round(new_tech_level, 1)
 
         # update tech level and calculate new influence radius
@@ -339,7 +403,7 @@ class Civilisation(mesa.Agent):
 
         elif action=="hide":
             # TODO: define hiding more rigorously
-            self.visibility_factor *= 0.7
+            self.visibility_factor *= self.model.visibility_multiplier
 
             self.dprint(f"Hides (tech level {self.tech_level},",
                         f"visibility {self.visibility_factor:.3f})")
@@ -360,7 +424,6 @@ class Civilisation(mesa.Agent):
 
         # update last acted time
         self.last_acted = self.model.schedule.time
-
 
     def attack(self, attacker):
         """
@@ -413,6 +476,36 @@ class Civilisation(mesa.Agent):
         if self.model.debug:
             print(f"t={self.model.schedule.time}, {self.unique_id}:", *message)
 
+    def _init_state(self):
+        """Initialises the state array"""
+        if self.growth == sigmoid_growth:
+            self._state = np.zeros(4)
+        else:
+            raise NotImplementedError()
+
+    def get_state(self):
+        """
+        Updates self._state and returns it.
+        
+        The state consists of 4 numbers: 
+        1. time since last destruction
+        2. visibility factor
+        3. growth speed
+        4. growth takeoff time
+
+        The last two are related to the specific growth model assumed, and
+        will therefore be different with different growth types
+        """
+        if self.growth == sigmoid_growth:
+            self._state[0] = self.model.schedule.time - self.reset_time
+            self._state[1] = self.visibility_factor
+            self._state[2] = self.growth_kwargs['speed']
+            self._state[3] = self.growth_kwargs['takeoff_time']
+        else:
+            raise NotImplementedError()
+
+        return self._state
+
     def __str__(self):
         return f"{self.unique_id}"
 
@@ -420,7 +513,8 @@ class Universe(mesa.Model):
 
     def __init__(self, num_agents, toroidal_space=False, 
                  agent_growth=sigmoid_growth, decision_making="random", 
-                 hostility_belief_prior=0.01, debug=False, rng_seed=0, 
+                 hostility_belief_prior=0.01, visibility_multiplier=0.7, 
+                 debug=False, rng_seed=0, 
                  **agent_growth_kwargs) -> None:
         
         # initialise random number generator
@@ -457,14 +551,39 @@ class Universe(mesa.Model):
             tables={'actions': ['time', 'actor', 'action', 'attack_target', 
                                 'attack_successful']})
 
+        # initialise model state (see a detailed description in the get_state
+        # method)
+        self._init_state()
+
         # save parameters
         self.debug = debug
         self.hostility_belief_prior = hostility_belief_prior
+        self.visibility_multiplier = visibility_multiplier
 
     def step(self):
         """Advance the model by one step."""
         self.datacollector.collect(self)
         self.schedule.step()
+
+    def _init_state(self):
+        """Initialise model state"""
+        # get length of state of individual agent
+        agent_state_len = self.schedule.agents[0]._state.size
+        num_agents = len(self.schedule.agents)
+        self._state = np.zeros((num_agents, agent_state_len))
+
+    def get_state(self):
+        """
+        Update and return the current model state.
+
+        Returns:
+        a NumPy array of shape (n, k), where k is the length of the state
+        description of a single agent
+        """
+        for i, agent in enumerate(self.schedule.agents):
+            self._state[i] = agent.get_state()
+
+        return self._state
 
 class SingleActivation(mesa.time.BaseScheduler):
     """
