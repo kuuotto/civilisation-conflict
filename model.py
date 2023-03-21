@@ -48,7 +48,8 @@ def prob_smaller(rv1, rv2, n_samples=100, include_equal=False):
 def transition(model, action):
     """
     Given a model in a given state and an action, this function produces all 
-    the possible future states and the associated probabilities.
+    the possible future states and the associated probabilities. This can be
+    used as the transition function for all agents.
 
     Keyword arguments:
     model: a Universe object
@@ -71,8 +72,7 @@ def transition(model, action):
             # if actor hides, additionally update their visibility
             state[action['actor'].unique_id, 1] *= model.visibility_multiplier
             
-        result_states = (state,)
-        result_state_probs = (1,)
+        return (state,), (1,)
 
     elif isinstance(action['type'], Civilisation):
         # if there is an attack, see if it is successful or not
@@ -87,22 +87,53 @@ def transition(model, action):
 
         if action['actor'].tech_level > target.tech_level:
             # civilisation is destroyed
-            result_states = (destroyed_state,)
-            result_state_probs = (1,)
+            return (destroyed_state,), (1,)
         elif action['actor'].tech_level == target.tech_level:
             # if the civilisations are evenly matched, the target is destroyed
             # with a 50% probability
-            result_states = (survived_state, destroyed_state)
-            result_state_probs = (0.5, 0.5)
+            return (survived_state, destroyed_state), (0.5, 0.5)
         else:
             # target civilisation is not destroyed
-            result_states = (survived_state,)
-            result_state_probs = (1,)
+            return (survived_state,), (1,)
 
     else:
         raise Exception(f"Action format was incorrect: {action}")
 
-    return result_states, result_state_probs
+
+def reward(agent, action, 
+           rewards={'destroyed': -1, 'hide': -0.01, 'attack': 0}):
+    """
+    Given an agent and an action, this function calculates the reward from 
+    that action for the agent.
+
+    Keyword arguments:
+    agent: a Civilisation whose reward to calculate
+    action: a dictionary, with keys 'actor' (a Civilisation) and 'type'
+            (either a string ('hide' for hiding or '-' for no action) or a 
+             Civilisation that was attacked)
+    """
+    # TODO: this function is probably called a lot with a skip action, could
+    # be sped up in that case.
+
+    actor = action['actor']
+
+    if isinstance(action['type'], Civilisation):
+        # action was an attack
+        target = action['type']
+
+        if target == agent and target.tech_level < actor.tech_level:
+            return rewards['destroyed']
+        elif target == agent and target.tech_level == actor.tech_level:
+            return rewards['destroyed'] / 2
+        elif actor == agent:
+            return rewards['attack']
+
+    elif action == 'hide' and actor == agent:
+        return rewards['hide']
+
+    # in all other cases the reward is 0
+    return 0
+
 
 class TechBelief():
     """Helper class for converting distributions into the range [0,1]"""
