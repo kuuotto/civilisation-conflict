@@ -22,12 +22,12 @@ def sigmoid_growth(time, speed, takeoff_time):
     Gives the current technology level for the agent. Assumes a
     sigmoid-shaped growing curve for the technological capabilities of
     civilisations.
+
+    Arguments can be individual numbers of NumPy arrays of equal length.
     """
     exponent = -speed * (time - takeoff_time)
-    # avoid overflows in exp
-    if exponent > 10:
-        return 0
-    return 1/(1+np.exp(exponent))
+    # clip avoid overflows in exp
+    return 1/(1+np.exp(exponent.clip(max=10)))
 
 def prob_smaller(rv1, rv2, n_samples=100, include_equal=False):
     """

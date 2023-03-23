@@ -1,6 +1,7 @@
 # %%
 import numpy as np
-from model import Civilisation, sigmoid_growth
+from model import Civilisation, influence_radius, sigmoid_growth
+from scipy.stats import multivariate_normal
 
 def transition(model, action):
     """
@@ -67,7 +68,7 @@ def reward(agent, action,
     agent: a Civilisation whose reward to calculate
     action: a dictionary, with keys 'actor' (a Civilisation) and 'type'
             (either a string ('hide' for hiding or '-' for no action) or a 
-             Civilisation that was attacked)
+            Civilisation that was attacked)
     """
     # TODO: this function is probably called a lot with a skip action, could
     # be sped up in that case.
@@ -90,6 +91,79 @@ def reward(agent, action,
 
     # in all other cases the reward is 0
     return 0
+
+def prob_observation(model, agent, state, action, observation, agent_growth, 
+                     obs_noise_sd):
+    """
+    Returns the probability (density) of a given observation by “agent”, given 
+    that the system is currently in state “state” and the previous action was 
+    “action”.
+
+    Keyword arguments:
+    model: a Universe. Used for determining distances between civilisations.
+    agent: the observing Civilisation
+    state: a NumPy array of size n_agents x k, where k is the size of an
+            individual agent state representation. For 
+            agent_growth = sigmoid_growth, k = 4.
+    action: a dictionary, with keys 'actor' (a Civilisation) and 'type'
+            (either a string ('hide' for hiding or '-' for no action) or a 
+            Civilisation that was attacked)
+    observation: a NumPy array of length n_agents or n_agents + 1. The latter
+                 corresponds to an observation where an attacker gets to know
+                 the result of their attack last round (0 or 1). This binary
+                 value is the last value in the array. A numpy.NaN 
+                 denotes a civilisation that agent cannot observe yet.
+    agent_growth: growth function used
+    obs_noise_sd: standard deviation of observation noise (which is assumed to
+                  follow a normal distribution centered around the true 
+                  technosignature value)
+    """
+    agent_id = agent.unique_id
+    num_agents = state.shape[0]
+
+    # calculate tech levels
+    if agent_growth == sigmoid_growth:
+        agent_tech_levels = sigmoid_growth(time=state[:, 0], 
+                                           speed=state[:, 2],
+                                           takeoff_time=state[:, 3])
+    else:
+        raise NotImplementedError()
+
+    # make sure that the tech level of agent is correct in the observation
+    # TODO: not sure if this is necessary
+    if observation[agent_id] != agent_tech_levels[agent_id]:
+        return 0
+
+    # make sure that observation only contains observations on civilisations 
+    # that agent can see
+    nbr_ids = [nbr.unique_id
+               for nbr in model.space.get_neighbors(
+                   pos=agent.pos,
+                   radius=influence_radius(agent_tech_levels[agent_id]),
+                   include_center=False)]
+    nbr_obs = observation[nbr_ids]
+    unobserved_obs = np.delete(observation, nbr_ids)
+
+    if np.isnan(nbr_obs).any() or not np.isnan(unobserved_obs).all():
+        return 0
+
+    # check that if the agent attacked last round, the observation contains a 
+    # bit indicating the success of the attack
+    if (action['actor'] == agent and
+        (len(observation) != num_agents + 1 or
+         observation[-1] not in (0, 1))):
+        return 0
+
+    # return density of multivariate normal. Observations from neighbours are
+    # independent, centered around their respective technosignatures and
+    # have a variance of obs_noise_sd^2
+    # technosignature is a product of visibility factor and tech level
+    nbr_technosignatures = agent_tech_levels[nbr_ids] * state[nbr_ids, 1]
+    density = multivariate_normal.pdf(nbr_obs, 
+                                      mean=nbr_technosignatures,
+                                      cov=obs_noise_sd**2)
+
+    return density
 
 def sample_init(n_samples, n_agents, level, rng, agent_growth, 
                 **agent_growth_kwargs):
