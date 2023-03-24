@@ -233,7 +233,7 @@ def sample_observation(n_samples, rng, model, agent, state, action,
     return sample
 
 
-def sample_init(n_samples, n_agents, level, rng, agent_growth, 
+def sample_init(n_samples, n_agents, level, agent, rng, agent_growth, 
                 **agent_growth_kwargs):
     """
     Samples the initial beliefs of an agent.
@@ -257,10 +257,15 @@ def sample_init(n_samples, n_agents, level, rng, agent_growth,
     of which has a sample of size n_samples representing that agents belief
     about the environment.
 
+    Note that the agent always has correct beliefs about its own part of the
+    environment state (although it's beliefs about others' beliefs of course
+    don't have to be correct in general)
+
     Keyword arguments:
     n_samples: number of samples to generate
     n_agents: number of agents in the model
     level: level of interactive beliefs of the agent. 0 or 1
+    agent: a Civilisation whose initial beliefs are sampled
     rng: random number generator (from the Universe object or elsewhere)
     agent_growth: growth function used
     **agent_growth_kwargs: arguments used for the growth function
@@ -268,6 +273,7 @@ def sample_init(n_samples, n_agents, level, rng, agent_growth,
     Returns:
     A NumPy array (see description above for the size)
     """
+    agent_id = agent.unique_id
 
     # determine the number of values needed to describe an agent
     if agent_growth == sigmoid_growth:
@@ -315,6 +321,9 @@ def sample_init(n_samples, n_agents, level, rng, agent_growth,
             sample[:, :, 3] = rng.integers(*takeoff_time_range, 
                                            size=(n_samples, n_agents))
 
+            # agent is certain about it's own state
+            sample[:, agent_id, :] = agent.get_state()
+
     elif level == 1:
 
         sample[:, :, :, 0] = 0
@@ -325,6 +334,10 @@ def sample_init(n_samples, n_agents, level, rng, agent_growth,
                     size=(n_samples, 1 + (n_agents - 1) * n_samples, n_agents))
             sample[:, :, :, 3] = rng.integers(*takeoff_time_range,
                     size=(n_samples, 1 + (n_agents - 1) * n_samples, n_agents))
+
+        # agent is certain about it's own state in its own beliefs about the
+        # environment
+        sample[:, 0, agent_id, :] = agent.get_state()
 
     return sample
 
