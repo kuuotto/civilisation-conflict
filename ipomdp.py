@@ -112,7 +112,8 @@ def prob_observation(model, agent, state, action, observation, agent_growth,
                  corresponds to an observation where an attacker gets to know
                  the result of their attack last round (0 or 1). This binary
                  value is the last value in the array. A numpy.NaN 
-                 denotes a civilisation that agent cannot observe yet.
+                 denotes a civilisation that agent cannot observe yet, or the
+                 agent itself.
     agent_growth: growth function used
     obs_noise_sd: standard deviation of observation noise (which is assumed to
                   follow a normal distribution centered around the true 
@@ -128,11 +129,6 @@ def prob_observation(model, agent, state, action, observation, agent_growth,
                                            takeoff_time=state[:, 3])
     else:
         raise NotImplementedError()
-
-    # make sure that the tech level of agent is correct in the observation
-    # TODO: not sure if this is necessary
-    if observation[agent_id] != agent_tech_levels[agent_id]:
-        return 0
 
     # make sure that observation only contains observations on civilisations 
     # that agent can see
@@ -150,6 +146,7 @@ def prob_observation(model, agent, state, action, observation, agent_growth,
     # check that if the agent attacked last round, the observation contains a 
     # bit indicating the success of the attack
     if (action['actor'] == agent and
+        isinstance(action['type'], Civilisation) and
         (len(observation) != num_agents + 1 or
          observation[-1] not in (0, 1))):
         return 0
@@ -164,6 +161,77 @@ def prob_observation(model, agent, state, action, observation, agent_growth,
                                       cov=obs_noise_sd**2)
 
     return density
+
+def sample_observation(n_samples, rng, model, agent, state, action, 
+                       agent_growth, obs_noise_sd):
+    """
+    Returns n_samples of possible observations of “agent” when the system is
+    currently in state “state” and the previous action was “action”.
+
+    Keyword arguments:
+    n_samples: number of observation samples to generate
+    rng: a NumPy random number generator
+    model: a Universe. Used for determining distances between civilisations.
+    agent: the observing Civilisation
+    state: a NumPy array of size n_agents x k, where k is the size of an
+           individual agent state representation. For 
+           agent_growth = sigmoid_growth, k = 4.
+    action: a dictionary, with keys 'actor' (a Civilisation) and 'type'
+            (either a string ('hide' for hiding or '-' for no action) or a 
+            Civilisation that was attacked)
+    agent_growth: growth function used
+    obs_noise_sd: standard deviation of observation noise (which is assumed to
+                  follow a normal distribution centered around the true 
+                  technosignature value)
+
+    Returns:
+    observation: a NumPy array of size n_samples x (n_agents or n_agents + 1). 
+                 The latter corresponds to an observation where an attacker 
+                 gets to know the result of their attack last round (0 or 1). 
+                 This binary value is the last value in the array. A numpy.NaN 
+                 denotes a civilisation that agent cannot observe yet, or the
+                 agent itself.
+    """
+    agent_id = agent.unique_id
+    n_agents = state.shape[0]
+    obs_length = n_agents
+
+    # if agent has attacked another last round, we need to include a result
+    # bit in each observation
+    if action['actor'] == agent and isinstance(action['type'], Civilisation):
+        obs_length = n_agents + 1
+        target_id = action['type'].unique_id
+        target_destroyed = int(state[target_id, 0] == 0)
+
+    # initialise array
+    sample = np.full(shape=(n_samples, obs_length), fill_value=np.nan)
+
+    # add success bit if necessary
+    if obs_length == n_agents + 1:
+        sample[:, -1] = target_destroyed
+
+    # calculate tech levels
+    if agent_growth == sigmoid_growth:
+        agent_tech_levels = sigmoid_growth(time=state[:, 0], 
+                                           speed=state[:, 2],
+                                           takeoff_time=state[:, 3])
+    else:
+        raise NotImplementedError()
+
+    # add observations from the civilisations the agent can see
+    nbr_ids = [nbr.unique_id
+               for nbr in model.space.get_neighbors(
+                   pos=agent.pos,
+                   radius=influence_radius(agent_tech_levels[agent_id]),
+                   include_center=False)]
+    nbr_technosignatures = agent_tech_levels[nbr_ids] * state[nbr_ids, 1]
+    nbr_observations = rng.multivariate_normal(mean=nbr_technosignatures,
+                                               cov=obs_noise_sd**2 * np.eye(len(nbr_ids)),
+                                               size=n_samples)
+    sample[:, nbr_ids] = nbr_observations
+
+    return sample
+
 
 def sample_init(n_samples, n_agents, level, rng, agent_growth, 
                 **agent_growth_kwargs):
