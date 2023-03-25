@@ -3,59 +3,89 @@ import numpy as np
 from model import Civilisation, influence_radius, sigmoid_growth
 from scipy.stats import multivariate_normal
 
-def transition(model, action):
+def transition(state, action, model, agent_growth):
     """
-    Given a model in a given state and an action, this function produces all 
-    the possible future states and the associated probabilities. This can be
-    used as the transition function for all agents.
+    Given a model state and an action, this function samples from the
+    distribution of all possible future states. In practice a (state, action) 
+    combination only has one possible future state, except in the case of
+    equally matched target and attacker, in which case the target is
+    destoryed with a 0.5 probability (although note that that can only happen
+    if tech levels are discrete, which they currently are not). This can be 
+    used as the transition function for all agents, as they all have the same 
+    transition model.
 
+    Can also be supplied with multiple states and the same number of actions,
+    in which case the states are all propagated forward with the corresponding
+    actions.
+
+    The random number generator of the model (the rng attribute) is used for
+    random choices.
+ 
     Keyword arguments:
-    model: a Universe object
+    state: representation of the system at time t-1. a NumPy array of size 
+           (n_agents, k), where k is the length of an individual agent state
+           representation (k=4 for sigmoid growth). If multiple states are 
+           propagated simultaneously, should be of shape (n_samples, n_agents, 
+           k).
     action: a dictionary, with keys 'actor' (a Civilisation) and 'type'
             (either a string ('hide' for hiding or '-' for no action) or a 
-             Civilisation that was attacked)
+            Civilisation that was attacked). If multiple states are supplied, 
+            this should be a list of length n_samples.
+    model: a Universe
+    agent_growth: growth function used
 
-    Returns: two tuples, the first for possible new states (represented as 
-             NumPy arrays) and the second for the associated probabilities
+    Returns: 
+    A possible system state at time t. A NumPy array of the same shape as 
+    the state argument.
     """
-    # get current state as a n x k NumPy array
-    state = model.get_state().copy()
+    # copy state so we don't change original
+    state = state.copy()
+
+    # if a single (state, action) combination is supplied, reshape
+    if len(state.shape) == 2:
+        state = state[np.newaxis]
+    if not isinstance(action, list):
+        action = [action]
+
+    # make sure we have the same number of states and actions
+    assert(len(state) == len(action))
 
     # always tick everyone's time by one
-    state[:, 0] += 1
+    state[:, :, 0] += 1
+
+    for sample, act in enumerate(action):
     
-    if action['type'] == '-' or action['type'] == 'hide':
-
-        if action['type'] == 'hide':
+        if act['type'] == 'hide':
             # if actor hides, additionally update their visibility
-            state[action['actor'].unique_id, 1] *= model.visibility_multiplier
-            
-        return (state,), (1,)
+            state[sample, act['actor'].unique_id, 1] *= model.visibility_multiplier
 
-    elif isinstance(action['type'], Civilisation):
-        # if there is an attack, see if it is successful or not
-        target = action['type']
+        elif isinstance(act['type'], Civilisation):
+            # if there is an attack, see if it is successful or not
+            target_id = act['type'].unique_id
+            actor_state = state[sample, act['actor'].unique_id, :]
+            target_state = state[sample, target_id, :]
 
-        # create states corresponding to the target surviving or dying
-        # TODO: room for optimisation
-        survived_state = state
-        destroyed_state = state.copy()
-        destroyed_state[target.unique_id, 0] = 0 # reset time
-        destroyed_state[target.unique_id, 1] = 1 # visibility factor
+            if agent_growth == sigmoid_growth:
+                actor_tech_level = sigmoid_growth(time=actor_state[0],
+                                                  speed=actor_state[2],
+                                                  takeoff_time=actor_state[3])
+                target_tech_level = sigmoid_growth(time=target_state[0],
+                                                   speed=target_state[2],
+                                                   takeoff_time=target_state[3])
+            else:
+                raise NotImplementedError()
 
-        if action['actor'].tech_level > target.tech_level:
-            # civilisation is destroyed
-            return (destroyed_state,), (1,)
-        elif action['actor'].tech_level == target.tech_level:
-            # if the civilisations are evenly matched, the target is destroyed
-            # with a 50% probability
-            return (survived_state, destroyed_state), (0.5, 0.5)
+            if (actor_tech_level > target_tech_level or
+                (actor_tech_level == target_tech_level and 
+                 model.rng.random() > 0.5)):
+                # civilisation is destroyed
+                state[sample, target_id, 0] = 0 # reset time
+                state[sample, target_id, 1] = 1 # visibility factor
+
         else:
-            # target civilisation is not destroyed
-            return (survived_state,), (1,)
+            raise Exception(f"Action format was incorrect: {action}")
 
-    else:
-        raise Exception(f"Action format was incorrect: {action}")
+    return state
 
 
 def reward(agent, action, 
@@ -341,3 +371,105 @@ def sample_init(n_samples, n_agents, level, agent, rng, agent_growth,
 
     return sample
 
+def update_beliefs_0(agent, belief, agent_action, agent_observation, 
+                     action_dist_0, model, agent_growth, obs_noise_sd):
+    """
+    Calculates agent's updated beliefs. This is done assuming that agent has 
+    beliefs at t-1 represented by the particle set “belief”, agent takes the 
+    given action and receives the given observation, and assumes a given 
+    level 0 action distribution by the other agents.
+
+    Model's random number generator (rng attribute) is used for sampling
+    other's actions and for resampling.
+
+    Keyword arguments:
+    agent: a Civilisation whose level 0 beliefs are in question. (In practice
+           these beliefs are held by another civilisation about agent. This
+           other civilisation attempts to simulate agent's belief update and
+           thus update it's own beliefs about agent's beliefs.)
+    belief: a sample of environment states. A NumPy array of size 
+            (n_samples, n_agents, k) where k is the size of an individual 
+            agent state representation. For sigmoid growth k = 4.
+    agent_action: action taken by agent at t-1. Either a string ('hide' 
+                  for hiding or '-' for no action) or a Civilisation that was 
+                  attacked. If someone else acted, None.
+    agent_observation: observation made by agent at time t following the 
+                       action. A NumPy array of length n_agents or n_agents+1
+                       if agent_action was an attack.
+    action_dist_0: the distribution of actions that agent assumes others 
+                   sampled their actions from at time t-1. "random" means the
+                   others' action is chosen uniformly over the set of possible
+                   choices. That is the only implemented option so far.
+    model: a Universe
+    agent_growth: growth function used
+    obs_noise_sd: standard deviation of observation noise (which is assumed to
+                  follow a normal distribution centered around the true 
+                  technosignature value)
+
+    Returns:
+    a sample of environment states representing the updated beliefs. A NumPy
+    array of size (n_samples, n_agents, k)
+    """
+    n_samples = belief.shape[0]
+
+    # calculate influence radii of civilisations in the different samples
+    if agent_growth == sigmoid_growth:
+        # this is of shape (n_samples, n_agents)
+        radii = influence_radius(sigmoid_growth(time=belief[:, : 0],
+                                                speed=belief[:, :, 2],
+                                                takeoff_time=belief[:, :, 3]))
+    else:
+        raise NotImplementedError()
+
+    # sample others' actions, one for each sample
+    if action_dist_0 == "random":
+
+        if agent_action == None:
+            # if agent didn't act, then one other civilisatin is randomly
+            # chosen to act and one of their possible actions is randomly 
+            # chosen
+            other_agents = [ag for ag in model.schedule.agents if ag != agent]
+            actors = model.rng.choice(other_agents, size=n_samples)
+            
+            actors_nbrs = [model.space.get_neighbors(
+                    pos=actor.pos,
+                    radius=influence_radius(radii[sample, actor.unique_id]),
+                    include_center=False)
+                for sample, actor in enumerate(actors)]
+            actor_actions = [model.rng.choice(['hide', '-'] + actor_nbrs)
+                       for actor_nbrs in actors_nbrs]
+        
+            actions = [{'actor': actor, 'type': action}
+                       for actor, action in zip(actors, actor_actions)]
+
+        else:
+            # if agent acted, then the others cannot do anything
+            actions = n_samples * [{'actor': agent, 'type': agent_action}]
+
+    else:
+        raise NotImplementedError()
+
+
+    # propagate all sample states forward using the sampled actions
+    propagated_states = transition(state=belief, action=actions, model=model,
+                                   agent_growth=agent_growth)
+
+    # calculate weights of all propagated states, given by the observation
+    # probabilities
+    weights = np.array([prob_observation(model=model,
+                                         agent=agent,
+                                         state=p_state,
+                                         action=action,
+                                         observation=agent_observation,
+                                         agent_growth=agent_growth,
+                                         obs_noise_sd=obs_noise_sd)
+                        for p_state, action in zip(propagated_states, actions)])
+
+    # normalise weights
+    weights = weights / weights.sum()
+
+    # resample
+    updated_belief = model.rng.choice(propagated_states, 
+                                      size=n_samples, p=weights)
+
+    return updated_belief
