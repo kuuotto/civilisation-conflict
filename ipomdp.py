@@ -82,9 +82,6 @@ def transition(state, action, model, agent_growth):
                 state[sample, target_id, 0] = 0 # reset time
                 state[sample, target_id, 1] = 1 # visibility factor
 
-        else:
-            raise Exception(f"Action format was incorrect: {action}")
-
     return state
 
 
@@ -215,12 +212,12 @@ def sample_observation(n_samples, rng, model, agent, state, action,
                   technosignature value)
 
     Returns:
-    observation: a NumPy array of size n_samples x (n_agents or n_agents + 1). 
-                 The latter corresponds to an observation where an attacker 
-                 gets to know the result of their attack last round (0 or 1). 
-                 This binary value is the last value in the array. A numpy.NaN 
-                 denotes a civilisation that agent cannot observe yet, or the
-                 agent itself.
+    The observations. A NumPy array of size  n_samples x 
+    (n_agents or n_agents + 1). The latter corresponds to an observation 
+    where an attacker gets to know the result of their attack last round 
+    (0 or 1). This binary value is the last value in the array. A numpy.NaN 
+    denotes a civilisation that agent cannot observe yet, or the agent itself.
+    If n_samples == 1, the NumPy array is squeezes into a 1d array.
     """
     agent_id = agent.unique_id
     n_agents = state.shape[0]
@@ -259,6 +256,9 @@ def sample_observation(n_samples, rng, model, agent, state, action,
                                                cov=obs_noise_sd**2 * np.eye(len(nbr_ids)),
                                                size=n_samples)
     sample[:, nbr_ids] = nbr_observations
+
+    if n_samples == 1:
+        return sample[0]
 
     return sample
 
@@ -415,7 +415,7 @@ def update_beliefs_0(agent, belief, agent_action, agent_observation,
     # calculate influence radii of civilisations in the different samples
     if agent_growth == sigmoid_growth:
         # this is of shape (n_samples, n_agents)
-        radii = influence_radius(sigmoid_growth(time=belief[:, : 0],
+        radii = influence_radius(sigmoid_growth(time=belief[:, :, 0],
                                                 speed=belief[:, :, 2],
                                                 takeoff_time=belief[:, :, 3]))
     else:
