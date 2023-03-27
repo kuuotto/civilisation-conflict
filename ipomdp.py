@@ -3,7 +3,7 @@ import numpy as np
 from model import Civilisation, influence_radius, sigmoid_growth
 from scipy.stats import multivariate_normal
 
-def transition(state, action, model, agent_growth):
+def transition(state, action, model, agent_growth, in_place=False):
     """
     Given a model state and an action, this function samples from the
     distribution of all possible future states. In practice a (state, action) 
@@ -33,13 +33,15 @@ def transition(state, action, model, agent_growth):
             this should be a list of length n_samples.
     model: a Universe
     agent_growth: growth function used
+    in_place: boolean, whether to change the state object directly
 
     Returns: 
     A possible system state at time t. A NumPy array of the same shape as 
     the state argument.
     """
     # copy state so we don't change original
-    state = state.copy()
+    if not in_place:
+        state = state.copy()
 
     # if a single (state, action) combination is supplied, reshape
     if len(state.shape) == 2:
@@ -189,16 +191,18 @@ def prob_observation(model, agent, state, action, observation, agent_growth,
 
     return density
 
-def sample_observation(n_samples, rng, model, agent, state, action, 
+def sample_observation(n_samples, model, agent, state, action, 
                        agent_growth, obs_noise_sd):
     """
     Returns n_samples of possible observations of “agent” when the system is
     currently in state “state” and the previous action was “action”.
 
+    Model's random number generator (rng attribute) is used for sampling.
+
     Keyword arguments:
     n_samples: number of observation samples to generate
-    rng: a NumPy random number generator
-    model: a Universe. Used for determining distances between civilisations.
+    model: a Universe. Used for determining distances between civilisations and
+           for random sampling.
     agent: the observing Civilisation
     state: a NumPy array of size n_agents x k, where k is the size of an
            individual agent state representation. For 
@@ -252,9 +256,9 @@ def sample_observation(n_samples, rng, model, agent, state, action,
                    radius=influence_radius(agent_tech_levels[agent_id]),
                    include_center=False)]
     nbr_technosignatures = agent_tech_levels[nbr_ids] * state[nbr_ids, 1]
-    nbr_observations = rng.multivariate_normal(mean=nbr_technosignatures,
-                                               cov=obs_noise_sd**2 * np.eye(len(nbr_ids)),
-                                               size=n_samples)
+    nbr_observations = model.rng.multivariate_normal(mean=nbr_technosignatures,
+                                    cov=obs_noise_sd**2 * np.eye(len(nbr_ids)),
+                                    size=n_samples)
     sample[:, nbr_ids] = nbr_observations
 
     if n_samples == 1:
@@ -372,7 +376,8 @@ def sample_init(n_samples, n_agents, level, agent, rng, agent_growth,
     return sample
 
 def update_beliefs_0(agent, belief, agent_action, agent_observation, 
-                     action_dist_0, model, agent_growth, obs_noise_sd):
+                     action_dist_0, model, agent_growth, obs_noise_sd,
+                     in_place=False):
     """
     Calculates agent's updated beliefs. This is done assuming that agent has 
     beliefs at t-1 represented by the particle set “belief”, agent takes the 
@@ -405,6 +410,9 @@ def update_beliefs_0(agent, belief, agent_action, agent_observation,
     obs_noise_sd: standard deviation of observation noise (which is assumed to
                   follow a normal distribution centered around the true 
                   technosignature value)
+    in_place: whether intermediate operations can modify “belief” in-place.
+              Note that even if this is True, the final result is only returned
+              and not saved in-place.
 
     Returns:
     a sample of environment states representing the updated beliefs. A NumPy
@@ -452,7 +460,7 @@ def update_beliefs_0(agent, belief, agent_action, agent_observation,
 
     # propagate all sample states forward using the sampled actions
     propagated_states = transition(state=belief, action=actions, model=model,
-                                   agent_growth=agent_growth)
+                                   agent_growth=agent_growth, in_place=in_place)
 
     # calculate weights of all propagated states, given by the observation
     # probabilities
@@ -473,3 +481,144 @@ def update_beliefs_0(agent, belief, agent_action, agent_observation,
                                       size=n_samples, p=weights)
 
     return updated_belief
+
+def update_beliefs_1(agent, belief, agent_action, agent_observation, 
+                     action_dist_0, model, agent_growth, obs_noise_sd):
+    """
+    Calculates agent's updated level 1 interactive beliefs. This is done 
+    assuming that agent has level 1 interactive beliefs at t-1 represented by 
+    the particle set “belief”, agent takes the given action and receives the 
+    given observation, and assumes that the other agents assume a given level 0 
+    action distribution for the other agents when the original agent updates 
+    its level 0 beliefs about others' beliefs.
+
+    NOTE: currently only a single observation of each of the other agents is
+    sampled when updating the level 0 beliefs corresponding to a propagated
+    environment state.
+
+    Model's random number generator (rng attribute) is used for sampling
+    other's actions and for resampling.
+
+    Keyword arguments:
+    agent: a Civilisation whose level 1 beliefs are in question
+    belief: a sample of level 1 interactive states. A NumPy array of size 
+            n_samples x (1 + (n_agents - 1) * n_samples) x n_agents x k
+            where k is the size of an individual agent state representation. 
+            For sigmoid growth k = 4. In a sample, the first state corresponds
+            to an environment state, the following n_samples correspond to 
+            beliefs about civilisation 0's beliefs, the next n_samples
+            correspond to beliefs about civilisation 1's beliefs, and so on
+            (skipping the agent's own id)
+    agent_action: action taken by agent at t-1. Either a string ('hide' 
+                  for hiding or '-' for no action) or a Civilisation that was 
+                  attacked. If someone else acted, None.
+    agent_observation: observation made by agent at time t following the 
+                       action. A NumPy array of length n_agents or n_agents+1
+                       if agent_action was an attack.
+    action_dist_0: the distribution of actions that agent assumes others 
+                   assume when agent updates its level 0 beliefs about them.
+                   Passed to update_beliefs_0. "random" means the others' 
+                   action is chosen uniformly over the set of possible
+                   choices. That is the only implemented option so far.
+    model: a Universe
+    agent_growth: growth function used
+    obs_noise_sd: standard deviation of observation noise (which is assumed to
+                  follow a normal distribution centered around the true 
+                  technosignature value)
+
+    Returns:
+    a sample of environment states representing the updated interactive 
+    beliefs. A NumPy array of size 
+    n_samples x (1 + (n_agents - 1) * n_samples) x n_agents x k
+    """
+    n_samples = belief.shape[0]
+
+    # determine what others did last round, for each sample
+    if agent_action == None:
+        # if agent didn't act, then someone else did. Therefore we determine
+        # the set of rational actions for each other civilisation and sample
+        # one of these per civilisation. We do this for each sample.
+
+        # find other agents and represent with tuples of form 
+        # (agent, array_index)
+        other_agents = [(ag,
+                         ag.unique_id if ag.unique_id < agent.unique_id else ag.unique_id-1)
+                        for ag in model.schedule.agents
+                        if ag != agent]
+
+        # determine optimal actions for each agent in each environment state
+        actions = [{'actor': ag,
+                    'type': optimal_action(ag,
+                                           i_state[1 + n_samples*ind:
+                                                   1 + n_samples*(ind+1)])}
+                   for ag, ind in other_agents
+                   for i_state in belief]
+
+        n_actions = len(other_agents)
+
+    else:
+        # if agent acted, then the others cannot do anything
+        actions = [{'actor': agent, 'type': agent_action} for i_state in belief]
+        n_actions = 1
+
+    # propagate environment states using the determined actions
+    # repeat also creates a copy of belief so the original belief will not
+    # be altered
+    propagated_i_states = belief.repeat(repeats=n_actions, axis=0)
+    transition(state=propagated_i_states[:, 0, :, :],
+               action=actions,
+               model=model,
+               agent_growth=agent_growth,
+               in_place=True)
+
+    # calculate associated weights, which depend on how compatible the state-
+    # action combination is with the given observation
+    weights = np.array([prob_observation(model=model, 
+                                         agent=agent, 
+                                         state=p_p_i_state[0], 
+                                         action=action,
+                                         observation=agent_observation,
+                                         agent_growth=agent_growth,
+                                         obs_noise_sd=obs_noise_sd)
+                        for p_p_i_state, action in zip(propagated_i_states, actions)])
+
+    # normalise weights
+    weights = weights / weights.sum()
+
+    # resample
+    samples = model.rng.choice(len(propagated_i_states), 
+                               size=n_samples, p=weights)
+    propagated_i_states = propagated_i_states[samples]
+    actions = actions[list(samples)]
+
+    # we have to update the level 0 beliefs for each interactive state sampled
+    for sample_i, (p_i_state, action) in enumerate(zip(propagated_i_states, actions)):
+
+        for ag, ind in other_agents:
+            # sample a single observations for each other agent
+            observation = sample_observation(n_samples=1,
+                                             model=model,
+                                             agent=ag,
+                                             state=p_i_state[0],
+                                             action=action,
+                                             agent_growth=agent_growth,
+                                             obs_noise_sd=obs_noise_sd)
+
+            ag_action = action['type'] if action['actor'] == ag else None
+
+            # update agent's level 0 beliefs about ag
+            propagated_i_states[sample_i,
+                                1 + n_samples*ind:
+                                1 + n_samples*(ind+1)] = (
+                update_beliefs_0(agent=ag,
+                                 belief=p_i_state[1 + n_samples*ind:
+                                                  1 + n_samples*(ind+1)],
+                                 agent_action=ag_action,
+                                 agent_observation=observation,
+                                 action_dist_0=action_dist_0,
+                                 model=model,
+                                 agent_growth=agent_growth,
+                                 obs_noise_sd=obs_noise_sd,
+                                 in_place=True))
+
+    return propagated_i_states
