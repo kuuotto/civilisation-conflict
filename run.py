@@ -1,6 +1,6 @@
 # %%
-from model import Universe
-from visualise import (draw_universe, plot_technology_distribution, 
+from model.model import Universe
+from model.visualise import (draw_universe, plot_technology_distribution, 
                        plot_streak_length_distribution)
 import matplotlib.pyplot as plt
 from tqdm import tqdm
