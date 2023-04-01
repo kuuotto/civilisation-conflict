@@ -1,5 +1,5 @@
 # %%
-from model.model import Universe
+from model.model import Universe, sigmoid_growth
 from model.visualise import (draw_universe, plot_technology_distribution, 
                        plot_streak_length_distribution)
 import matplotlib.pyplot as plt
@@ -8,17 +8,21 @@ from tqdm import tqdm
 # %% Run model and gather data
 
 # parameters
-params = {'num_steps': 500,
-          'num_agents': 20,
+params = {'n_agents': 50,
+          'agent_growth': sigmoid_growth,
+          'agent_growth_params': {'speed_range': (0.3, 1),
+                                  'takeoff_time_range': (10, 100)},
+          'obs_noise_sd': 0.05,
+          'action_dist_0': 'random',
+          'discount_factor': 0.9,
           'decision_making': 'targeted',
-          'hostility_belief_prior': 0.1,
-          'speed_range': (0.3, 1),
-          'takeoff_time_range': (10, 100)}
+          'visibility_multiplier': 0.5}
+n_steps = 100
 
 # create a universe
 model = Universe(debug=False, **params)
 # simulate
-for i in tqdm(range(params["num_steps"])):
+for i in tqdm(range(n_steps)):
     model.step()
 
 # retrieve data
@@ -27,7 +31,7 @@ action_data = model.datacollector.get_table_dataframe("actions")
 
 # %% Visualise model run
 vis = draw_universe(data=data, action_data=action_data, 
-                    anim_filename="output.mp4", 
+                    anim_filename="output/output.mp4", 
                     anim_length=60)
 plt.show()
 

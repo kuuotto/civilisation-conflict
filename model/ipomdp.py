@@ -3,9 +3,28 @@ import numpy as np
 from model.model import Civilisation, influence_radius, sigmoid_growth
 from scipy.stats import multivariate_normal
 
-#%%
+def tech_level(state, model):
+    """
+    Calculate the tech level(s) of the agent(s) in state. 
+    
+    State can be an individual agent state (in which case a single tech level
+    is returned), a model state (in which case n_agents tech levels are 
+    returned) or a higher-dimensional collection of model states. 
 
-def transition(state, action, model, agent_growth, in_place=False):
+    Keyword arguments:
+    state - a NumPy array where the last dimension corresponds to an individual
+            agent state
+    model - a Universe with a corresponding agent growth function saved in
+            its agent_growth attribute
+    """
+    if model.agent_growth == sigmoid_growth:
+        return sigmoid_growth(time=state[..., 0],
+                              speed=state[..., 2],
+                              takeoff_time=state[..., 3])
+    else:
+        raise NotImplementedError()
+
+def transition(state, action, model, in_place=False):
     """
     Given a model state and an action, this function samples from the
     distribution of all possible future states. In practice a (state, action) 
@@ -34,7 +53,6 @@ def transition(state, action, model, agent_growth, in_place=False):
             Civilisation that was attacked). If multiple states are supplied, 
             this should be a list of length n_samples.
     model: a Universe
-    agent_growth: growth function used
     in_place: boolean, whether to change the state object directly
 
     Returns: 
@@ -69,15 +87,8 @@ def transition(state, action, model, agent_growth, in_place=False):
             actor_state = state[sample, act['actor'].unique_id, :]
             target_state = state[sample, target_id, :]
 
-            if agent_growth == sigmoid_growth:
-                actor_tech_level = sigmoid_growth(time=actor_state[0],
-                                                  speed=actor_state[2],
-                                                  takeoff_time=actor_state[3])
-                target_tech_level = sigmoid_growth(time=target_state[0],
-                                                   speed=target_state[2],
-                                                   takeoff_time=target_state[3])
-            else:
-                raise NotImplementedError()
+            actor_tech_level = tech_level(state=actor_state, model=model)
+            target_tech_level = tech_level(state=target_state, model=model)
 
             if (actor_tech_level > target_tech_level or
                 (actor_tech_level == target_tech_level and 
@@ -126,43 +137,35 @@ def reward(agent, action,
     # in all other cases the reward is 0
     return 0
 
-def prob_observation(model, agent, state, action, observation, agent_growth, 
-                     obs_noise_sd):
+def prob_observation(observation, state, action, agent, model):
     """
     Returns the probability (density) of a given observation by “agent”, given 
     that the system is currently in state “state” and the previous action was 
     “action”.
 
+    Technosignature observations from each agent are assumed to have Gaussian
+    observation noise, which is saved in the model's obs_noise_sd attribute.
+
     Keyword arguments:
-    model: a Universe. Used for determining distances between civilisations.
-    agent: the observing Civilisation
-    state: a NumPy array of size n_agents x k, where k is the size of an
-            individual agent state representation. For 
-            agent_growth = sigmoid_growth, k = 4.
-    action: a dictionary, with keys 'actor' (a Civilisation) and 'type'
-            (either a string ('hide' for hiding or '-' for no action) or a 
-            Civilisation that was attacked)
     observation: a NumPy array of length n_agents or n_agents + 1. The latter
                  corresponds to an observation where an attacker gets to know
                  the result of their attack last round (0 or 1). This binary
                  value is the last value in the array. A numpy.NaN 
                  denotes a civilisation that agent cannot observe yet, or the
                  agent itself.
-    agent_growth: growth function used
-    obs_noise_sd: standard deviation of observation noise (which is assumed to
-                  follow a normal distribution centered around the true 
-                  technosignature value)
+    state: a NumPy array of size n_agents x k, where k is the size of an
+            individual agent state representation
+    action: a dictionary, with keys 'actor' (a Civilisation) and 'type'
+            (either a string ('hide' for hiding or '-' for no action) or a 
+            Civilisation that was attacked)
+    agent: the observing Civilisation
+    model: a Universe. Used for determining distances between civilisations.
     """
     agent_id = agent.unique_id
     n_agents = state.shape[0]
 
     # calculate tech levels
-    if agent_growth == sigmoid_growth:
-        agent_tech_levels = sigmoid_growth(time=state[:, 0], 
-                                           speed=state[:, 2],
-                                           takeoff_time=state[:, 3])
-    else:
-        raise NotImplementedError()
+    agent_tech_levels = tech_level(state=state, model=model)
 
     # make sure that observation only contains observations on civilisations 
     # that agent can see
@@ -198,33 +201,30 @@ def prob_observation(model, agent, state, action, observation, agent_growth,
     nbr_technosignatures = agent_tech_levels[nbr_ids] * state[nbr_ids, 1]
     density = multivariate_normal.pdf(nbr_obs, 
                                       mean=nbr_technosignatures,
-                                      cov=obs_noise_sd**2)
+                                      cov=model.obs_noise_sd**2)
 
     return density
 
-def sample_observation(state, action, agent, n_samples, model,
-                       agent_growth, obs_noise_sd):
+def sample_observation(state, action, agent, model, n_samples):
     """
     Returns n_samples of possible observations of “agent” when the system is
     currently in state “state” and the previous action was “action”.
 
     Model's random number generator (rng attribute) is used for sampling.
 
+    Technosignature observations from each agent are assumed to have Gaussian
+    observation noise, which is saved in the model's obs_noise_sd attribute.
+
     Keyword arguments:
     state: a NumPy array of size n_agents x k, where k is the size of an
-           individual agent state representation. For 
-           agent_growth = sigmoid_growth, k = 4.
+           individual agent state representation
     action: a dictionary, with keys 'actor' (a Civilisation) and 'type'
             (either a string ('hide' for hiding or '-' for no action) or a 
             Civilisation that was attacked)
     agent: the observing Civilisation
-    n_samples: number of observation samples to generate
     model: a Universe. Used for determining distances between civilisations and
            for random sampling.
-    agent_growth: growth function used
-    obs_noise_sd: standard deviation of observation noise (which is assumed to
-                  follow a normal distribution centered around the true 
-                  technosignature value)
+    n_samples: number of observation samples to generate
 
     Returns:
     The observations. A NumPy array of size  n_samples x 
@@ -257,12 +257,7 @@ def sample_observation(state, action, agent, n_samples, model,
         sample[:, -1] = target_destroyed
 
     # calculate tech levels
-    if agent_growth == sigmoid_growth:
-        agent_tech_levels = sigmoid_growth(time=state[:, 0], 
-                                           speed=state[:, 2],
-                                           takeoff_time=state[:, 3])
-    else:
-        raise NotImplementedError()
+    agent_tech_levels = tech_level(state=state, model=model)
 
     # add observations from the civilisations the agent can see
     nbr_ids = [nbr.unique_id
@@ -275,9 +270,9 @@ def sample_observation(state, action, agent, n_samples, model,
         nbr_technosignatures = agent_tech_levels[nbr_ids] * state[nbr_ids, 1]
 
         nbr_observations = model.rng.multivariate_normal(
-                                        mean=nbr_technosignatures,
-                                        cov=obs_noise_sd**2 * np.eye(len(nbr_ids)),
-                                        size=n_samples)
+                            mean=nbr_technosignatures,
+                            cov=model.obs_noise_sd**2 * np.eye(len(nbr_ids)),
+                            size=n_samples)
         sample[:, nbr_ids] = nbr_observations
 
     if n_samples == 1:
@@ -285,8 +280,7 @@ def sample_observation(state, action, agent, n_samples, model,
 
     return sample
 
-def sample_init(n_samples, n_agents, level, agent, rng, agent_growth, 
-                **agent_growth_kwargs):
+def sample_init(n_samples, level, agent, model):
     """
     Samples the initial beliefs of an agent.
 
@@ -318,17 +312,15 @@ def sample_init(n_samples, n_agents, level, agent, rng, agent_growth,
     n_agents: number of agents in the model
     level: level of interactive beliefs of the agent. 0 or 1
     agent: a Civilisation whose initial beliefs are sampled
-    rng: random number generator (from the Universe object or elsewhere)
-    agent_growth: growth function used
-    **agent_growth_kwargs: arguments used for the growth function
 
     Returns:
     A NumPy array (see description above for the size)
     """
     agent_id = agent.unique_id
+    n_agents = len(model.schedule.agents)
 
     # determine the number of values needed to describe an agent
-    if agent_growth == sigmoid_growth:
+    if model.agent_growth == sigmoid_growth:
         k = 4
     else:
         raise NotImplementedError()
@@ -342,23 +334,22 @@ def sample_init(n_samples, n_agents, level, agent, rng, agent_growth,
         raise NotImplementedError("Levels above 1 are not supported")
 
     # determine the values or range of the growth parameters
-    if agent_growth == sigmoid_growth:
+    if model.agent_growth == sigmoid_growth:
 
-        if ("speed" in agent_growth_kwargs and 
-            "takeoff_time" in agent_growth_kwargs):
+        if ("speed" in model.agent_growth_params and 
+            "takeoff_time" in model.agent_growth_params):
             # every agent has the same growth parameters
-            speed_range = (agent_growth_kwargs["speed"], 
-                           agent_growth_kwargs["speed"])
-            takeoff_time_range = (agent_growth_kwargs["takeoff_time"],
-                                  agent_growth_kwargs["takeoff_time"])
-        elif ("speed_range" in agent_growth_kwargs and 
-              "takeoff_time_range" in agent_growth_kwargs):
+            speed_range = (model.agent_growth_params["speed"], 
+                           model.agent_growth_params["speed"])
+            takeoff_time_range = (model.agent_growth_params["takeoff_time"],
+                                  model.agent_growth_params["takeoff_time"])
+        elif ("speed_range" in model.agent_growth_params and 
+              "takeoff_time_range" in model.agent_growth_params):
             # growth parameters are sampled from the given ranges
-            speed_range = agent_growth_kwargs["speed_range"]
-            takeoff_time_range = agent_growth_kwargs["takeoff_time_range"]
+            speed_range = model.agent_growth_params["speed_range"]
+            takeoff_time_range = model.agent_growth_params["takeoff_time_range"]
         else:
             raise Exception("Sigmoid growth parameters are incorrect")
-
 
     if level == 0:
 
@@ -367,11 +358,11 @@ def sample_init(n_samples, n_agents, level, agent, rng, agent_growth,
         # likewise, initially everyone has a visibility factor of 1
         sample[:, :, 1] = 1
 
-        if agent_growth == sigmoid_growth:
-            sample[:, :, 2] = rng.uniform(*speed_range, 
-                                          size=(n_samples, n_agents))
-            sample[:, :, 3] = rng.integers(*takeoff_time_range, 
-                                           size=(n_samples, n_agents))
+        if model.agent_growth == sigmoid_growth:
+            sample[:, :, 2] = model.rng.uniform(*speed_range, 
+                                                size=(n_samples, n_agents))
+            sample[:, :, 3] = model.rng.integers(*takeoff_time_range, 
+                                                 size=(n_samples, n_agents))
 
             # agent is certain about it's own state
             sample[:, agent_id, :] = agent.get_state()
@@ -381,11 +372,11 @@ def sample_init(n_samples, n_agents, level, agent, rng, agent_growth,
         sample[:, :, :, 0] = 0
         sample[:, :, :, 1] = 1
 
-        if agent_growth == sigmoid_growth:
-            sample[:, :, :, 2] = rng.uniform(*speed_range,
-                    size=(n_samples, 1 + (n_agents - 1) * n_samples, n_agents))
-            sample[:, :, :, 3] = rng.integers(*takeoff_time_range,
-                    size=(n_samples, 1 + (n_agents - 1) * n_samples, n_agents))
+        if model.agent_growth == sigmoid_growth:
+            sample[:, :, :, 2] = model.rng.uniform(*speed_range,
+                size=(n_samples, 1 + (n_agents - 1) * n_samples, n_agents))
+            sample[:, :, :, 3] = model.rng.integers(*takeoff_time_range,
+                size=(n_samples, 1 + (n_agents - 1) * n_samples, n_agents))
 
         # agent is certain about it's own state in its own beliefs about the
         # environment
@@ -393,14 +384,14 @@ def sample_init(n_samples, n_agents, level, agent, rng, agent_growth,
 
     return sample
 
-def update_beliefs_0(agent, belief, agent_action, agent_observation, 
-                     action_dist_0, model, agent_growth, obs_noise_sd,
-                     in_place=False, **kwargs):
+def update_beliefs_0(belief, agent_action, agent_observation, agent,
+                     model, in_place=False, **kwargs):
     """
     Calculates agent's updated beliefs. This is done assuming that agent has 
     beliefs at t-1 represented by the particle set “belief”, agent takes the 
     given action and receives the given observation, and assumes a given 
-    level 0 action distribution by the other agents.
+    level 0 action distribution by the other agents (the model action_dist_0
+    attribute).
 
     Model's random number generator (rng attribute) is used for sampling
     other's actions and for resampling.
@@ -409,10 +400,6 @@ def update_beliefs_0(agent, belief, agent_action, agent_observation,
     optimal_action
 
     Keyword arguments:
-    agent: a Civilisation whose level 0 beliefs are in question. (In practice
-           these beliefs are held by another civilisation about agent. This
-           other civilisation attempts to simulate agent's belief update and
-           thus update it's own beliefs about agent's beliefs.)
     belief: a sample of environment states. A NumPy array of size 
             (n_samples, n_agents, k) where k is the size of an individual 
             agent state representation. For sigmoid growth k = 4.
@@ -422,15 +409,11 @@ def update_beliefs_0(agent, belief, agent_action, agent_observation,
     agent_observation: observation made by agent at time t following the 
                        action. A NumPy array of length n_agents or n_agents+1
                        if agent_action was an attack.
-    action_dist_0: the distribution of actions that agent assumes others 
-                   sampled their actions from at time t-1. "random" means the
-                   others' action is chosen uniformly over the set of possible
-                   choices. That is the only implemented option so far.
+    agent: a Civilisation whose level 0 beliefs are in question. (In practice
+           these beliefs are held by another civilisation about agent. This
+           other civilisation attempts to simulate agent's belief update and
+           thus update it's own beliefs about agent's beliefs.)
     model: a Universe
-    agent_growth: growth function used
-    obs_noise_sd: standard deviation of observation noise (which is assumed to
-                  follow a normal distribution centered around the true 
-                  technosignature value)
     in_place: whether intermediate operations can modify “belief” in-place.
               Note that even if this is True, the final result is only returned
               and not saved in-place.
@@ -442,16 +425,11 @@ def update_beliefs_0(agent, belief, agent_action, agent_observation,
     n_samples = belief.shape[0]
 
     # calculate influence radii of civilisations in the different samples
-    if agent_growth == sigmoid_growth:
-        # this is of shape (n_samples, n_agents)
-        radii = influence_radius(sigmoid_growth(time=belief[:, :, 0],
-                                                speed=belief[:, :, 2],
-                                                takeoff_time=belief[:, :, 3]))
-    else:
-        raise NotImplementedError()
+    # this is of shape (n_samples, n_agents)
+    radii = influence_radius(tech_level(state=belief, model=model))
 
     # sample others' actions, one for each sample
-    if action_dist_0 == "random":
+    if model.action_dist_0 == "random":
 
         if agent_action == None:
             # if agent didn't act, then one other civilisatin is randomly
@@ -481,7 +459,7 @@ def update_beliefs_0(agent, belief, agent_action, agent_observation,
 
     # propagate all sample states forward using the sampled actions
     propagated_states = transition(state=belief, action=actions, model=model,
-                                   agent_growth=agent_growth, in_place=in_place)
+                                   in_place=in_place)
 
     # calculate weights of all propagated states, given by the observation
     # probabilities
@@ -489,9 +467,7 @@ def update_beliefs_0(agent, belief, agent_action, agent_observation,
                                          agent=agent,
                                          state=p_state,
                                          action=action,
-                                         observation=agent_observation,
-                                         agent_growth=agent_growth,
-                                         obs_noise_sd=obs_noise_sd)
+                                         observation=agent_observation)
                         for p_state, action in zip(propagated_states, actions)])
 
     # normalise weights
@@ -503,9 +479,8 @@ def update_beliefs_0(agent, belief, agent_action, agent_observation,
 
     return updated_belief
 
-def update_beliefs_1(agent, belief, agent_action, agent_observation, 
-                     action_dist_0, model, agent_growth, obs_noise_sd,
-                     time_horizon, discount_factor):
+def update_beliefs_1(belief, agent_action, agent_observation, agent, model,
+                     time_horizon):
     """
     Calculates agent's updated level 1 interactive beliefs. This is done 
     assuming that agent has level 1 interactive beliefs at t-1 represented by 
@@ -522,7 +497,6 @@ def update_beliefs_1(agent, belief, agent_action, agent_observation,
     other's actions and for resampling.
 
     Keyword arguments:
-    agent: a Civilisation whose level 1 beliefs are in question
     belief: a sample of level 1 interactive states. A NumPy array of size 
             n_samples x (1 + (n_agents - 1) * n_samples) x n_agents x k
             where k is the size of an individual agent state representation. 
@@ -537,20 +511,10 @@ def update_beliefs_1(agent, belief, agent_action, agent_observation,
     agent_observation: observation made by agent at time t following the 
                        action. A NumPy array of length n_agents or n_agents+1
                        if agent_action was an attack.
-    action_dist_0: the distribution of actions that agent assumes others 
-                   assume when agent updates its level 0 beliefs about them.
-                   Passed to update_beliefs_0. "random" means the others' 
-                   action is chosen uniformly over the set of possible
-                   choices. That is the only implemented option so far.
+    agent: a Civilisation whose level 1 beliefs are in question
     model: a Universe
-    agent_growth: growth function used
-    obs_noise_sd: standard deviation of observation noise (which is assumed to
-                  follow a normal distribution centered around the true 
-                  technosignature value)
     time_horizon: number of time steps to look ahed when determining what
                   others did
-    discount_factor: how much future time steps are discounted when determining
-                     the rational actions of other agents
 
     Returns:
     a sample of environment states representing the updated interactive 
@@ -577,12 +541,8 @@ def update_beliefs_1(agent, belief, agent_action, agent_observation,
                         agent=ag,
                         actor=ag,
                         time_horizon=time_horizon,
-                        level=0,
-                        discount_factor=discount_factor,
-                        action_dist_0=action_dist_0,
+                        level=0,                  
                         model=model,
-                        agent_growth=agent_growth,
-                        obs_noise_sd=obs_noise_sd,
                         return_sample=True)}
                    for ag, ind in other_agents
                    for i_state in belief]
@@ -601,7 +561,6 @@ def update_beliefs_1(agent, belief, agent_action, agent_observation,
     transition(state=propagated_i_states[:, 0, :, :],
                action=actions,
                model=model,
-               agent_growth=agent_growth,
                in_place=True)
 
     # calculate associated weights, which depend on how compatible the state-
@@ -610,9 +569,7 @@ def update_beliefs_1(agent, belief, agent_action, agent_observation,
                                          agent=agent, 
                                          state=p_p_i_state[0], 
                                          action=action,
-                                         observation=agent_observation,
-                                         agent_growth=agent_growth,
-                                         obs_noise_sd=obs_noise_sd)
+                                         observation=agent_observation)
                         for p_p_i_state, action in zip(propagated_i_states, actions)])
 
     # normalise weights
@@ -633,9 +590,7 @@ def update_beliefs_1(agent, belief, agent_action, agent_observation,
                                              model=model,
                                              agent=ag,
                                              state=p_i_state[0],
-                                             action=action,
-                                             agent_growth=agent_growth,
-                                             obs_noise_sd=obs_noise_sd)
+                                             action=action)
 
             ag_action = action['type'] if action['actor'] == ag else None
 
@@ -648,16 +603,12 @@ def update_beliefs_1(agent, belief, agent_action, agent_observation,
                                                   1 + n_samples*(ind+1)],
                                  agent_action=ag_action,
                                  agent_observation=observation,
-                                 action_dist_0=action_dist_0,
                                  model=model,
-                                 agent_growth=agent_growth,
-                                 obs_noise_sd=obs_noise_sd,
                                  in_place=True))
 
     return propagated_i_states
 
-def optimal_action(belief, agent, actor, time_horizon, level, discount_factor, 
-                   action_dist_0, model, agent_growth, obs_noise_sd, 
+def optimal_action(belief, agent, actor, time_horizon, level, model, 
                    return_sample=False):
     """
     Calculate the optimal action to take in belief state “belief”. Returns
@@ -681,14 +632,7 @@ def optimal_action(belief, agent, actor, time_horizon, level, discount_factor,
     actor: the Civilisation that gets to move on the first round
     time_horizon: number of rounds to model forward
     level: level of beliefs. Either 0 or 1.
-    discount_factor: a number between 0 and 1 indicating how much future 
-                     rewards are discounted
-    action_dist_0: distribution over others' actions that agent assumes
-                   others assume (at level 0) when they decide how to act. 
-                   "random" means a random choice over others' actions.
     model: a Universe. Used for determining neighbours and random sampling.
-    agent_growth: the growth model used
-    obs_noise_sd: standard deviation of observation noise
     return_sample: whether to return only one randomly chosen optimal action
 
     Returns:
@@ -713,12 +657,7 @@ def optimal_action(belief, agent, actor, time_horizon, level, discount_factor,
             agent_state = belief[0, agent.unique_id, :]
 
         # calculate agent's influence radius
-        if agent_growth == sigmoid_growth:
-            radius = influence_radius(sigmoid_growth(time=agent_state[0],
-                                                     speed=agent_state[2],
-                                                     takeoff_time=agent_state[3]))
-        else:
-            raise NotImplementedError()
+        radius = influence_radius(tech_level(state=agent_state, model=model))
 
         # get all neighbours
         agent_nbrs = model.space.get_neighbors(pos=agent.pos,
@@ -761,32 +700,23 @@ def optimal_action(belief, agent, actor, time_horizon, level, discount_factor,
 
                     # if there are multiple equally good actions, pick one randomly
                     action, _ = optimal_action(belief=actor_belief,
-                                            agent=actor,
-                                            actor=actor,
-                                            time_horizon=time_horizon,
-                                            level=0,
-                                            discount_factor=discount_factor,
-                                            action_dist_0=action_dist_0,
-                                            model=model,
-                                            agent_growth=agent_growth,
-                                            obs_noise_sd=obs_noise_sd,
-                                            return_sample=True)
+                                               agent=actor,
+                                               actor=actor,
+                                               time_horizon=time_horizon,
+                                               level=0,
+                                               model=model,
+                                               return_sample=True)
 
                 elif level == 0:
                     # if we don't have beliefs about actor's beliefs, we simply
                     # assume that they choose their action according to
                     # action_dist_0
 
-                    if action_dist_0 == "random":
+                    if model.action_dist_0 == "random":
 
                         actor_state = i_state[actor.unique_id]
-                        if agent_growth == sigmoid_growth:
-                            actor_influence_radius = influence_radius(
-                                sigmoid_growth(time=actor_state[0], 
-                                               speed=actor_state[2], 
-                                               takeoff_time=actor_state[3]))
-                        else:
-                            raise NotImplementedError()
+                        actor_influence_radius = influence_radius(
+                            tech_level(actor_state))
 
                         actor_nbrs = model.space.get_neighbors(
                                         pos=actor.pos,
@@ -803,23 +733,17 @@ def optimal_action(belief, agent, actor, time_horizon, level, discount_factor,
             else:
                 action = agent_action
 
-            if level == 1:
-                state = i_state[0]
-            elif level == 0:
-                state = i_state
+            state = i_state if level == 0 else i_state[0]
 
             # propagate environment state
-            state = transition(state=state, action=action, model=model,
-                               agent_growth=agent_growth)
+            state = transition(state=state, action=action, model=model)
 
             # sample an observation
             observation = sample_observation(state=state,
                                              action=action,
                                              agent=agent,
-                                             n_samples=1,
                                              model=model,
-                                             agent_growth=agent_growth,
-                                             obs_noise_sd=obs_noise_sd)
+                                             n_samples=1)
 
             # calculate immediate reward
             action_utility_sum += reward(agent=agent, action=action)
@@ -830,16 +754,12 @@ def optimal_action(belief, agent, actor, time_horizon, level, discount_factor,
                 updater = update_beliefs_1 if level == 1 else update_beliefs_0
 
                 updated_belief = updater(
-                    agent=agent,
                     belief=belief,
                     agent_action=action['type'] if agent == actor else None,
                     agent_observation=observation,
-                    action_dist_0=action_dist_0,
+                    agent=agent,
                     model=model,
-                    agent_growth=agent_growth,
-                    obs_noise_sd=obs_noise_sd,
-                    time_horizon=time_horizon,
-                    discount_factor=discount_factor)
+                    time_horizon=time_horizon)
 
                 next_utility_sum = 0
 
@@ -850,15 +770,12 @@ def optimal_action(belief, agent, actor, time_horizon, level, discount_factor,
                                                      actor=next_actor,
                                                      time_horizon=time_horizon-1,
                                                      level=level,
-                                                     discount_factor=discount_factor,
-                                                     action_dist_0=action_dist_0,
-                                                     model=model,
-                                                     agent_growth=agent_growth,
-                                                     obs_noise_sd=obs_noise_sd)
+                                                     model=model)
 
                     next_utility_sum += next_utility
 
-                action_utility_sum += discount_factor * next_utility_sum / n_agents
+                action_utility_sum += (model.discount_factor * 
+                                       next_utility_sum / n_agents)
 
         action_utility = action_utility_sum / n_samples
 

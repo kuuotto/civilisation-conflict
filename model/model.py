@@ -65,21 +65,13 @@ class TechBelief():
 class Civilisation(mesa.Agent):
     """An agent represeting a single civilisation in the universe"""
 
-    def __init__(self, unique_id, model, decision_making, growth,
-                 **growth_kwargs) -> None:
+    def __init__(self, unique_id, model) -> None:
         """
         Initialise a civilisation.
 
         Keyword arguments:
         unique_id: integer, uniquely identifies this civilisation
         model: a Universe object which this civilisation belongs to
-        decision_making: either "random" or "targeted" (see step_act for their
-                         meaning)
-        growth: a callable of the form growth(time, **growth_kwargs)
-        **growth_kwargs: keyword arguments to the growth function. Can also
-                         supply speed_range and takeoff_time_range in case 
-                         growth if sigmoid_growth, in which case the speed
-                         and takeoff time are randomly chosen from these ranges
         """
         super().__init__(unique_id, model)
 
@@ -99,30 +91,24 @@ class Civilisation(mesa.Agent):
         # civilisation destroyed another
         self.last_acted = -1
 
-        if (growth == sigmoid_growth and 
-            "speed" not in growth_kwargs and 
-            "takeoff_time" not in growth_kwargs):
-            # for sigmoid growth, parameters are chosen randomly from given
-            # ranges
+        # if model was supplied with ranges of values for sigmoid growth,
+        # randomly choose civilisation's parameter values from those ranges
+        if (model.agent_growth == sigmoid_growth and
+                "speed_range" in model.agent_growth_params and
+                "takeoff_time_range" in model.agent_growth_params):
 
-            if len(growth_kwargs) == 0:
-                speed_range = (2, 4)
-                takeoff_time_range = (1, 20)
-            elif "speed_range" in growth_kwargs and "takeoff_time_range" in growth_kwargs:
-                speed_range = growth_kwargs["speed_range"]
-                takeoff_time_range = growth_kwargs["takeoff_time_range"]
-            else:
-                raise Exception("Sigmoid growth parameters are incorrect")
+            speed_range = model.agent_growth_params["speed_range"]
+            takeoff_time_range = model.agent_growth_params["takeoff_time_range"]
 
-            growth_kwargs = {'speed': self.rng.uniform(*speed_range),
-                             'takeoff_time': self.rng.integers(
-                                        *takeoff_time_range, endpoint=True)}
-        
-        # save parameters
-        self.growth = growth
-        self.growth_kwargs = growth_kwargs
-        self.decision_making = decision_making
-    
+            self.agent_growth_params = {
+                'speed': self.rng.uniform(*speed_range),
+                'takeoff_time': self.rng.integers(*takeoff_time_range,
+                                                  endpoint=True)}
+
+        else:
+            # save agent growth parameters from the model
+            self.agent_growth_params = model.agent_growth_params
+
         # initialise own tech level
         self.step_tech_level()
 
@@ -139,8 +125,9 @@ class Civilisation(mesa.Agent):
     def step_tech_level(self):
         """Update own tech level"""
         # tech level is discretised
-        new_tech_level = self.growth(self.model.schedule.time - self.reset_time, 
-                                     **self.growth_kwargs)
+        new_tech_level = self.model.agent_growth(
+                            self.model.schedule.time - self.reset_time, 
+                            **self.agent_growth_params)
         new_tech_level = np.round(new_tech_level, 1)
 
         # update tech level and calculate new influence radius
@@ -301,14 +288,14 @@ class Civilisation(mesa.Agent):
         neighbours = self.get_neighbouring_agents()
 
         ### Choose an action
-        if self.decision_making == "random":
+        if self.model.decision_making == "random":
 
             actions = neighbours + ['no action']
             if self.visibility_factor == 1:
                 actions += ['hide']
             action = self.rng.choice(actions)
 
-        elif self.decision_making == "targeted":
+        elif self.model.decision_making == "targeted":
 
             # neighbours we are sure are hostile
             hostile_neighbours = {nbr for nbr in neighbours 
@@ -418,7 +405,7 @@ class Civilisation(mesa.Agent):
 
     def _init_state(self):
         """Initialises the state array"""
-        if self.growth == sigmoid_growth:
+        if self.model.agent_growth == sigmoid_growth:
             self._state = np.zeros(4)
         else:
             raise NotImplementedError()
@@ -436,11 +423,11 @@ class Civilisation(mesa.Agent):
         The last two are related to the specific growth model assumed, and
         will therefore be different with different growth types
         """
-        if self.growth == sigmoid_growth:
+        if self.model.agent_growth == sigmoid_growth:
             self._state[0] = self.model.schedule.time - self.reset_time
             self._state[1] = self.visibility_factor
-            self._state[2] = self.growth_kwargs['speed']
-            self._state[3] = self.growth_kwargs['takeoff_time']
+            self._state[2] = self.agent_growth_params['speed']
+            self._state[3] = self.agent_growth_params['takeoff_time']
         else:
             raise NotImplementedError()
 
@@ -451,11 +438,50 @@ class Civilisation(mesa.Agent):
 
 class Universe(mesa.Model):
 
-    def __init__(self, num_agents, toroidal_space=False, 
-                 agent_growth=sigmoid_growth, decision_making="random", 
-                 hostility_belief_prior=0.01, visibility_multiplier=0.7, 
-                 debug=False, rng_seed=0, 
-                 **agent_growth_kwargs) -> None:
+    def __init__(self, n_agents, agent_growth, agent_growth_params, 
+                 obs_noise_sd, action_dist_0, discount_factor, 
+                 visibility_multiplier, decision_making, 
+                 hostility_belief_prior=0.01,  
+                 toroidal_space=False, debug=False, rng_seed=0
+                ) -> None:
+        """
+        Initialise a new Universe model.
+
+        Keyword arguments:
+        n_agents: the number of agents in the model
+        agent_growth: the type of growth agents can undergo. A callable which
+                      accepts a time step and additional keyword arguments 
+                      defined in agent_growth_params.
+        agent_growth_params: see above
+        obs_noise_sd: standard deviation of technosignature observation noise
+                      (which follows an unbiased normal distribution)
+        action_dist_0: the method agents assume others use to figure out which
+                       actions other agents choose. "random" means the others'
+                       actions are chosen uniformly over the set of possible
+                       choices.
+        discount_factor: how much future time steps are discounted when 
+                         determining the rational actions of agents
+        visibility_multiplier: how much a single “hide” action multiplies the
+                               current agent visibility factor by
+        decision_making: the method used by agents to make decisions. Options
+                         include "random" and "ipomdp" ("targeted" is 
+                         deprecated)
+        hostility_belief_prior: deprecated
+        toroidal_space: whether to use a toroidal universe topology
+        debug: whether to print detailed debug information while model is run
+        rng_seed: seed of the random number generator. Fixing the seed allows
+                  for reproducibility
+        """
+        # save parameters
+        self.agent_growth = agent_growth
+        self.agent_growth_params = agent_growth_params
+        self.obs_noise_sd = obs_noise_sd
+        self.action_dist_0 = action_dist_0
+        self.discount_factor = discount_factor
+        self.visibility_multiplier = visibility_multiplier
+        self.decision_making = decision_making
+        self.hostility_belief_prior = hostility_belief_prior
+        self.debug = debug
         
         # initialise random number generator
         self.rng = np.random.default_rng(rng_seed)
@@ -469,10 +495,8 @@ class Universe(mesa.Model):
                                                 torus=toroidal_space)
 
         # add agents
-        for i in range(num_agents):
-            agent = Civilisation(i, self, growth=agent_growth, 
-                                 decision_making=decision_making,
-                                 **agent_growth_kwargs)
+        for i in range(n_agents):
+            agent = Civilisation(i, self)
             self.schedule.add(agent)
 
             # place agent in a randomly chosen position
@@ -494,11 +518,6 @@ class Universe(mesa.Model):
         # initialise model state (see a detailed description in the get_state
         # method)
         self._init_state()
-
-        # save parameters
-        self.debug = debug
-        self.hostility_belief_prior = hostility_belief_prior
-        self.visibility_multiplier = visibility_multiplier
 
     def step(self):
         """Advance the model by one step."""
