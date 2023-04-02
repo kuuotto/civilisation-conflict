@@ -1,6 +1,6 @@
 # %%
 import numpy as np
-from model.model import Civilisation, influence_radius, sigmoid_growth
+from model.growth import influence_radius, sigmoid_growth
 from scipy.stats import multivariate_normal
 
 def tech_level(state, model):
@@ -48,10 +48,11 @@ def transition(state, action, model, in_place=False):
            representation (k=4 for sigmoid growth). If multiple states are 
            propagated simultaneously, should be of shape (n_samples, n_agents, 
            k).
-    action: a dictionary, with keys 'actor' (a Civilisation) and 'type'
-            (either a string ('hide' for hiding or '-' for no action) or a 
-            Civilisation that was attacked). If multiple states are supplied, 
-            this should be a list of length n_samples.
+    action: a dictionary, with keys 'actor' (the id of the acting Civilisation) 
+            and 'type' (either a string ('hide' for hiding or '-' for no 
+            action) or the id of a Civilisation that was attacked). 
+            If multiple states are supplied, this should be a list of length 
+            n_samples.
     model: a Universe
     in_place: boolean, whether to change the state object directly
 
@@ -79,13 +80,12 @@ def transition(state, action, model, in_place=False):
     
         if act['type'] == 'hide':
             # if actor hides, additionally update their visibility
-            state[sample, act['actor'].unique_id, 1] *= model.visibility_multiplier
+            state[sample, act['actor'], 1] *= model.visibility_multiplier
 
-        elif isinstance(act['type'], Civilisation):
+        elif isinstance(act['type'], int):
             # if there is an attack, see if it is successful or not
-            target_id = act['type'].unique_id
-            actor_state = state[sample, act['actor'].unique_id, :]
-            target_state = state[sample, target_id, :]
+            actor_state = state[sample, act['actor'], :]
+            target_state = state[sample, act['type'], :]
 
             actor_tech_level = tech_level(state=actor_state, model=model)
             target_tech_level = tech_level(state=target_state, model=model)
@@ -94,8 +94,8 @@ def transition(state, action, model, in_place=False):
                 (actor_tech_level == target_tech_level and 
                  model.rng.random() > 0.5)):
                 # civilisation is destroyed
-                state[sample, target_id, 0] = 0 # reset time
-                state[sample, target_id, 1] = 1 # visibility factor
+                state[sample, act['type'], 0] = 0 # reset time
+                state[sample, act['type'], 1] = 1 # visibility factor
 
     # return only a single state if a single state was supplied
     if state.shape[0] == 1:
@@ -103,36 +103,42 @@ def transition(state, action, model, in_place=False):
 
     return state
 
-def reward(agent, action, 
-           rewards={'destroyed': -1, 'hide': -0.01, 'attack': 0}):
+def reward(state, action, agent, model):
     """
-    Given an agent and an action, this function calculates the reward from 
-    that action for the agent.
+    Given the current environment state and an action taken in that state, 
+    this function calculates the reward for an agent.
 
     Keyword arguments:
-    agent: a Civilisation whose reward to calculate
-    action: a dictionary, with keys 'actor' (a Civilisation) and 'type'
-            (either a string ('hide' for hiding or '-' for no action) or a 
-            Civilisation that was attacked)
+    state: a NumPy array of size n_agents x k, where k is the size of an
+           individual agent's portion of the environment state
+    action: a dictionary, with keys 'actor' (the id of the acting Civilisation) 
+            and 'type' (either a string ('hide' for hiding or '-' for no 
+            action) or the id of a Civilisation that was attacked). 
+    agent: the id of the Civilisation whose reward to calculate
+    model: a Universe
     """
-    # TODO: this function is probably called a lot with a skip action, could
-    # be sped up in that case.
-
     actor = action['actor']
 
-    if isinstance(action['type'], Civilisation):
+    if isinstance(action['type'], int):
         # action was an attack
         target = action['type']
 
-        if target == agent and target.tech_level < actor.tech_level:
-            return rewards['destroyed']
-        elif target == agent and target.tech_level == actor.tech_level:
-            return rewards['destroyed'] / 2
-        elif actor == agent:
-            return rewards['attack']
+        if target == agent:
+            
+            # calculate tech levels of actor and target
+            actor_tech_level = tech_level(state=state[actor], model=model)
+            target_tech_level = tech_level(state=state[target], model=model)
 
-    elif action == 'hide' and actor == agent:
-        return rewards['hide']
+            if target_tech_level < actor_tech_level:
+                return model.rewards['destroyed']
+            elif target_tech_level == actor_tech_level:
+                return model.rewards['destroyed'] / 2
+
+        elif actor == agent:
+            return model.rewards['attack']
+
+    elif action['type'] == 'hide' and actor == agent:
+        return model.rewards['hide']
 
     # in all other cases the reward is 0
     return 0
@@ -155,13 +161,12 @@ def prob_observation(observation, state, action, agent, model):
                  agent itself.
     state: a NumPy array of size n_agents x k, where k is the size of an
             individual agent state representation
-    action: a dictionary, with keys 'actor' (a Civilisation) and 'type'
-            (either a string ('hide' for hiding or '-' for no action) or a 
-            Civilisation that was attacked)
-    agent: the observing Civilisation
+    action: a dictionary, with keys 'actor' (the id of the acting Civilisation) 
+            and 'type' (either a string ('hide' for hiding or '-' for no 
+            action) or the id of a Civilisation that was attacked). 
+    agent: the id of the observing Civilisation
     model: a Universe. Used for determining distances between civilisations.
     """
-    agent_id = agent.unique_id
     n_agents = state.shape[0]
 
     # calculate tech levels
@@ -171,11 +176,12 @@ def prob_observation(observation, state, action, agent, model):
     # that agent can see
     nbr_ids = [nbr.unique_id
                for nbr in model.space.get_neighbors(
-                   pos=agent.pos,
-                   radius=influence_radius(agent_tech_levels[agent_id]),
+                   pos=model.schedule.agents[agent].pos,
+                   radius=influence_radius(agent_tech_levels[agent]),
                    include_center=False)]
     nbr_obs = observation[nbr_ids]
-    unobserved_obs = np.delete(observation if observation.shape[0] == n_agents else observation[:-1], 
+    unobserved_obs = np.delete((observation if observation.shape[0] == n_agents
+                                            else observation[:-1]), 
                                nbr_ids)
 
     if np.isnan(nbr_obs).any() or not np.isnan(unobserved_obs).all():
@@ -185,7 +191,7 @@ def prob_observation(observation, state, action, agent, model):
     # check that if the agent attacked last round, the observation contains a 
     # bit indicating the success of the attack
     if (action['actor'] == agent and
-        isinstance(action['type'], Civilisation) and
+        isinstance(action['type'], int) and
         (len(observation) != n_agents + 1 or
          observation[-1] not in (0, 1))):
         return 0
@@ -218,10 +224,10 @@ def sample_observation(state, action, agent, model, n_samples):
     Keyword arguments:
     state: a NumPy array of size n_agents x k, where k is the size of an
            individual agent state representation
-    action: a dictionary, with keys 'actor' (a Civilisation) and 'type'
-            (either a string ('hide' for hiding or '-' for no action) or a 
-            Civilisation that was attacked)
-    agent: the observing Civilisation
+    action: a dictionary, with keys 'actor' (the id of the acting Civilisation) 
+            and 'type' (either a string ('hide' for hiding or '-' for no 
+            action) or the id of a Civilisation that was attacked). 
+    agent: the id of the observing Civilisation
     model: a Universe. Used for determining distances between civilisations and
            for random sampling.
     n_samples: number of observation samples to generate
@@ -234,19 +240,18 @@ def sample_observation(state, action, agent, model, n_samples):
     denotes a civilisation that agent cannot observe yet, or the agent itself.
     If n_samples == 1, the NumPy array is squeezed into a 1d array.
     """
-    agent_id = agent.unique_id
+    assert(len(state.shape) == 2)
+
     n_agents = state.shape[0]
     obs_length = n_agents
 
-    assert(len(state.shape) == 2)
-
     # if agent has attacked another last round, we need to include a result
     # bit in each observation
-    if action['actor'] == agent and isinstance(action['type'], Civilisation):
+    if action['actor'] == agent and isinstance(action['type'], int):
         obs_length = n_agents + 1
 
         # determine if target was destroyed
-        target_id = action['type'].unique_id
+        target_id = action['type']
         target_destroyed = int(state[target_id, 0] == 0)
 
     # initialise array
@@ -262,8 +267,8 @@ def sample_observation(state, action, agent, model, n_samples):
     # add observations from the civilisations the agent can see
     nbr_ids = [nbr.unique_id
                for nbr in model.space.get_neighbors(
-                   pos=agent.pos,
-                   radius=influence_radius(agent_tech_levels[agent_id]),
+                   pos=model.schedule.agents[agent].pos,
+                   radius=influence_radius(agent_tech_levels[agent]),
                    include_center=False)]
 
     if len(nbr_ids) > 0:
@@ -280,7 +285,7 @@ def sample_observation(state, action, agent, model, n_samples):
 
     return sample
 
-def sample_init(n_samples, level, agent, model):
+def sample_init(n_samples, level, agent, agent_state, model):
     """
     Samples the initial beliefs of an agent.
 
@@ -309,15 +314,15 @@ def sample_init(n_samples, level, agent, model):
 
     Keyword arguments:
     n_samples: number of samples to generate
-    n_agents: number of agents in the model
     level: level of interactive beliefs of the agent. 0 or 1
-    agent: a Civilisation whose initial beliefs are sampled
+    agent: the id of the Civilisation whose initial beliefs are sampled
+    agent_state: the initial state of the agent (a NumPy array of length k)
+    model: a Universe
 
     Returns:
     A NumPy array (see description above for the size)
     """
-    agent_id = agent.unique_id
-    n_agents = len(model.schedule.agents)
+    n_agents = model.n_agents
 
     # determine the number of values needed to describe an agent
     if model.agent_growth == sigmoid_growth:
@@ -365,7 +370,7 @@ def sample_init(n_samples, level, agent, model):
                                                  size=(n_samples, n_agents))
 
             # agent is certain about it's own state
-            sample[:, agent_id, :] = agent.get_state()
+            sample[:, agent, :] = agent_state
 
     elif level == 1:
 
@@ -380,39 +385,36 @@ def sample_init(n_samples, level, agent, model):
 
         # agent is certain about it's own state in its own beliefs about the
         # environment
-        sample[:, 0, agent_id, :] = agent.get_state()
+        sample[:, 0, agent, :] = agent_state
 
     return sample
 
 def update_beliefs_0(belief, agent_action, agent_observation, agent,
-                     model, in_place=False, **kwargs):
+                     model, in_place=False):
     """
     Calculates agent's updated beliefs. This is done assuming that agent has 
     beliefs at t-1 represented by the particle set “belief”, agent takes the 
     given action and receives the given observation, and assumes a given 
-    level 0 action distribution by the other agents (the model action_dist_0
+    level 0 action distribution by the other agents (the model's action_dist_0
     attribute).
 
     Model's random number generator (rng attribute) is used for sampling
     other's actions and for resampling.
-
-    TODO: **kwargs is useless and is there for making this compatible with
-    optimal_action
 
     Keyword arguments:
     belief: a sample of environment states. A NumPy array of size 
             (n_samples, n_agents, k) where k is the size of an individual 
             agent state representation. For sigmoid growth k = 4.
     agent_action: action taken by agent at t-1. Either a string ('hide' 
-                  for hiding or '-' for no action) or a Civilisation that was 
-                  attacked. If someone else acted, None.
+                  for hiding or '-' for no action) or the id of a Civilisation 
+                  that was attacked. If someone else acted, None.
     agent_observation: observation made by agent at time t following the 
                        action. A NumPy array of length n_agents or n_agents+1
                        if agent_action was an attack.
-    agent: a Civilisation whose level 0 beliefs are in question. (In practice
-           these beliefs are held by another civilisation about agent. This
-           other civilisation attempts to simulate agent's belief update and
-           thus update it's own beliefs about agent's beliefs.)
+    agent: the id of the Civilisation whose level 0 beliefs are in question. 
+           (In practice these beliefs are held by another civilisation about 
+           agent. This other civilisation attempts to simulate agent's belief
+           update and thus update it's own beliefs about agent's beliefs.)
     model: a Universe
     in_place: whether intermediate operations can modify “belief” in-place.
               Note that even if this is True, the final result is only returned
@@ -432,21 +434,24 @@ def update_beliefs_0(belief, agent_action, agent_observation, agent,
     if model.action_dist_0 == "random":
 
         if agent_action == None:
-            # if agent didn't act, then one other civilisatin is randomly
+            # if agent didn't act, then one other civilisation is randomly
             # chosen to act and one of their possible actions is randomly 
             # chosen
-            other_agents = [ag for ag in model.schedule.agents if ag != agent]
+            other_agents = [ag for ag in model.schedule.agents
+                            if ag.unique_id != agent]
             actors = model.rng.choice(other_agents, size=n_samples)
             
+            # list of lists
             actors_nbrs = [model.space.get_neighbors(
                     pos=actor.pos,
                     radius=radii[sample, actor.unique_id],
                     include_center=False)
                 for sample, actor in enumerate(actors)]
-            actor_actions = [model.rng.choice(['hide', '-'] + actor_nbrs)
-                       for actor_nbrs in actors_nbrs]
+            actor_actions = [model.rng.choice(['hide', '-'] +
+                                              [nbr.unique_id for nbr in actor_nbrs])
+                             for actor_nbrs in actors_nbrs]
         
-            actions = [{'actor': actor, 'type': action}
+            actions = [{'actor': actor.unique_id, 'type': action}
                        for actor, action in zip(actors, actor_actions)]
 
         else:
@@ -460,7 +465,7 @@ def update_beliefs_0(belief, agent_action, agent_observation, agent,
     # propagate all sample states forward using the sampled actions
     propagated_states = transition(state=belief, action=actions, model=model,
                                    in_place=in_place)
-
+ 
     # calculate weights of all propagated states, given by the observation
     # probabilities
     weights = np.array([prob_observation(model=model,
@@ -469,6 +474,16 @@ def update_beliefs_0(belief, agent_action, agent_observation, agent,
                                          action=action,
                                          observation=agent_observation)
                         for p_state, action in zip(propagated_states, actions)])
+
+    if weights.sum() == 0:
+        # TODO: this is a problem. This means that none of the samples in the
+        # level 0 beliefs capture the situation where the given observation
+        # is possible. For example, the observation contains a technosignature
+        # observation from a civilisation which none of the samples think is
+        # possible for agent to observe.
+        # Possible solution could be to randomly sample new belief states. But
+        # how to ensure they have positive probability?
+        raise Exception("No beliefs are compatible with this observation!")
 
     # normalise weights
     weights = weights / weights.sum()
@@ -479,8 +494,7 @@ def update_beliefs_0(belief, agent_action, agent_observation, agent,
 
     return updated_belief
 
-def update_beliefs_1(belief, agent_action, agent_observation, agent, model,
-                     time_horizon):
+def update_beliefs_1(belief, agent_action, agent_observation, agent, model):
     """
     Calculates agent's updated level 1 interactive beliefs. This is done 
     assuming that agent has level 1 interactive beliefs at t-1 represented by 
@@ -506,15 +520,13 @@ def update_beliefs_1(belief, agent_action, agent_observation, agent, model,
             correspond to beliefs about civilisation 1's beliefs, and so on
             (skipping the agent's own id)
     agent_action: action taken by agent at t-1. Either a string ('hide' 
-                  for hiding or '-' for no action) or a Civilisation that was 
-                  attacked. If someone else acted, None.
+                  for hiding or '-' for no action) or the id of a Civilisation 
+                  that was attacked. If someone else acted, None.
     agent_observation: observation made by agent at time t following the 
                        action. A NumPy array of length n_agents or n_agents+1
                        if agent_action was an attack.
-    agent: a Civilisation whose level 1 beliefs are in question
+    agent: the id of the Civilisation whose level 1 beliefs are in question
     model: a Universe
-    time_horizon: number of time steps to look ahed when determining what
-                  others did
 
     Returns:
     a sample of environment states representing the updated interactive 
@@ -524,27 +536,27 @@ def update_beliefs_1(belief, agent_action, agent_observation, agent, model,
     n_samples = belief.shape[0]
 
     # find other agents and represent with tuples of form 
-    # (agent, array_index)
-    other_agents = [(ag, ag.unique_id - (ag.unique_id > agent.unique_id))
+    # (agent_id, array_index)
+    other_agents = [(ag.unique_id, ag.unique_id - (ag.unique_id > agent))
                     for ag in model.schedule.agents
-                    if ag != agent]
+                    if ag.unique_id != agent]
 
     # determine what others did last round, for each sample
     if agent_action == None:
         # if agent didn't act, then someone else did. Therefore we determine
         # the set of rational actions for each other civilisation and sample
-        # one of these per civilisation. We do this for each sample.
-        actions = [{'actor': ag,
-                    'type': optimal_action(
+        # one of these per civilisation. We do this for each sample. So in
+        # total actions will contain n_samples * (n_agents-1) actions
+        actions = [optimal_action(
                         belief=i_state[1 + n_samples*ind:
                                        1 + n_samples*(ind+1)],
-                        agent=ag,
-                        actor=ag,
-                        time_horizon=time_horizon,
-                        level=0,                  
+                        agent=ag_id,
+                        actor=ag_id,
+                        time_horizon=model.belief_update_time_horizon,
+                        level=0,
                         model=model,
-                        return_sample=True)}
-                   for ag, ind in other_agents
+                        return_sample=True)[0]
+                   for ag_id, ind in other_agents
                    for i_state in belief]
 
         n_actions = len(other_agents)
@@ -584,21 +596,21 @@ def update_beliefs_1(belief, agent_action, agent_observation, agent, model,
     # we have to update the level 0 beliefs for each interactive state sampled
     for sample_i, (p_i_state, action) in enumerate(zip(propagated_i_states, actions)):
 
-        for ag, ind in other_agents:
+        for ag_id, ind in other_agents:
             # sample a single observations for each other agent
             observation = sample_observation(n_samples=1,
                                              model=model,
-                                             agent=ag,
+                                             agent=ag_id,
                                              state=p_i_state[0],
                                              action=action)
 
-            ag_action = action['type'] if action['actor'] == ag else None
+            ag_action = action['type'] if action['actor'] == ag_id else None
 
             # update agent's level 0 beliefs about ag
             propagated_i_states[sample_i,
                                 1 + n_samples*ind:
                                 1 + n_samples*(ind+1)] = (
-                update_beliefs_0(agent=ag,
+                update_beliefs_0(agent=ag_id,
                                  belief=p_i_state[1 + n_samples*ind:
                                                   1 + n_samples*(ind+1)],
                                  agent_action=ag_action,
@@ -628,8 +640,8 @@ def optimal_action(belief, agent, actor, time_horizon, level, model,
             n_agents, k) where k is the size of an individual agent's part in
             the state representation. For sigmoid_growth, k=4. If level=0, 
             this is a NumPy array of size (n_samples, n_agents, k).
-    agent: the Civilisation whose utility is in question
-    actor: the Civilisation that gets to move on the first round
+    agent: the id of the Civilisation whose utility is in question
+    actor: the id of the Civilisation that gets to move on the first round
     time_horizon: number of rounds to model forward
     level: level of beliefs. Either 0 or 1.
     model: a Universe. Used for determining neighbours and random sampling.
@@ -642,7 +654,7 @@ def optimal_action(belief, agent, actor, time_horizon, level, model,
     #      f"{actor.unique_id} acts, horizon {time_horizon}")
 
     n_samples = belief.shape[0]
-    n_agents = len(model.schedule.agents)
+    n_agents = model.n_agents
     
     assert(level in (0, 1))
 
@@ -652,21 +664,22 @@ def optimal_action(belief, agent, actor, time_horizon, level, model,
 
         # agent state will be correct no matter which sample we choose
         if level == 1:
-            agent_state = belief[0, 0, agent.unique_id, :]
+            agent_state = belief[0, 0, agent, :]
         elif level == 0:
-            agent_state = belief[0, agent.unique_id, :]
+            agent_state = belief[0, agent, :]
 
         # calculate agent's influence radius
         radius = influence_radius(tech_level(state=agent_state, model=model))
 
         # get all neighbours
-        agent_nbrs = model.space.get_neighbors(pos=agent.pos,
+        agent_nbrs = model.space.get_neighbors(pos=model.schedule.agents[agent].pos,
                                                radius=radius,
                                                include_center=False)
 
         # create a list of actions
         agent_actions = [{'actor': agent, 'type': action}
-                         for action in ['hide', '-'] + agent_nbrs]
+                         for action in ['hide', '-'] + 
+                                       [nbr.unique_id for nbr in agent_nbrs]]
 
     else:
         # agent doesn't act
@@ -694,7 +707,7 @@ def optimal_action(belief, agent, actor, time_horizon, level, model,
                 if level == 1:
                     # if we have beliefs about actor's beliefs (level=1), 
                     # we need to solve actor's optimal action
-                    actor_ind = actor.unique_id - (actor.unique_id > agent.unique_id)
+                    actor_ind = actor - (actor > agent)
                     actor_belief = i_state[1 + actor_ind*n_samples: 
                                            1 + (actor_ind+1)*n_samples]
 
@@ -714,18 +727,18 @@ def optimal_action(belief, agent, actor, time_horizon, level, model,
 
                     if model.action_dist_0 == "random":
 
-                        actor_state = i_state[actor.unique_id]
+                        actor_state = i_state[actor]
                         actor_influence_radius = influence_radius(
-                            tech_level(actor_state))
+                            tech_level(state=actor_state, model=model))
 
                         actor_nbrs = model.space.get_neighbors(
-                                        pos=actor.pos,
+                                        pos=model.schedule.agents[actor].pos,
                                         radius=actor_influence_radius,
                                         include_center=False)
                         
                         action = {'actor': actor, 
                                   'type': model.rng.choice(['hide', '-'] + 
-                                                            actor_nbrs)}
+                                        [nbr.unique_id for nbr in actor_nbrs])}
                     
                     else:
                         raise NotImplementedError()
@@ -734,6 +747,10 @@ def optimal_action(belief, agent, actor, time_horizon, level, model,
                 action = agent_action
 
             state = i_state if level == 0 else i_state[0]
+
+            # calculate immediate reward
+            action_utility_sum += reward(state=state, action=action, 
+                                         agent=agent, model=model)
 
             # propagate environment state
             state = transition(state=state, action=action, model=model)
@@ -745,9 +762,6 @@ def optimal_action(belief, agent, actor, time_horizon, level, model,
                                              model=model,
                                              n_samples=1)
 
-            # calculate immediate reward
-            action_utility_sum += reward(agent=agent, action=action)
-
             if time_horizon > 0:
                 # update beliefs and compute expected utility at next time step
 
@@ -758,8 +772,7 @@ def optimal_action(belief, agent, actor, time_horizon, level, model,
                     agent_action=action['type'] if agent == actor else None,
                     agent_observation=observation,
                     agent=agent,
-                    model=model,
-                    time_horizon=time_horizon)
+                    model=model)
 
                 next_utility_sum = 0
 
@@ -767,7 +780,7 @@ def optimal_action(belief, agent, actor, time_horizon, level, model,
 
                     _, next_utility = optimal_action(belief=updated_belief,
                                                      agent=agent,
-                                                     actor=next_actor,
+                                                     actor=next_actor.unique_id,
                                                      time_horizon=time_horizon-1,
                                                      level=level,
                                                      model=model)

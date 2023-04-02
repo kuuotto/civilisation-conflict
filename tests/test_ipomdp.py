@@ -7,15 +7,19 @@ class TestIPOMDP(unittest.TestCase):
 
     def test_transition_1(self):
 
-        params = {'n_agents': 5,
-                  'agent_growth': sigmoid_growth,
-                  'agent_growth_params' : {'speed_range': (0.3, 1),
-                                           'takeoff_time_range': (10, 100)},
-                  'obs_noise_sd': 0.05,
-                  'action_dist_0': 'random',
-                  'discount_factor': 0.9,
-                  'decision_making': 'targeted',
-                  'visibility_multiplier': 0.5}
+        params = {'n_agents': 3,
+                'agent_growth': sigmoid_growth,
+                'agent_growth_params': {'speed_range': (0.3, 1),
+                                        'takeoff_time_range': (10, 100)},
+                'rewards': {'destroyed': -1, 'hide': -0.01, 'attack': 0},
+                'n_belief_samples': 30,
+                'obs_noise_sd': 0.05,
+                'belief_update_time_horizon': 1,
+                'planning_time_horizon': 2,
+                'action_dist_0': 'random',
+                'discount_factor': 0.9,
+                'decision_making': 'random',
+                'visibility_multiplier': 0.5}
 
         model = Universe(**params)
 
@@ -32,8 +36,8 @@ class TestIPOMDP(unittest.TestCase):
                                 agent_4_state), axis=0)
 
         ### strong attacking a weak agent
-        destroy_action = {'actor': model.schedule.agents[1], 
-                          'type': model.schedule.agents[0]}
+        destroy_action = {'actor': 1, 
+                          'type': 0}
 
         destroyed_state = ipomdp.transition(state=model_state,
                                             action=destroy_action,
@@ -54,8 +58,8 @@ class TestIPOMDP(unittest.TestCase):
         self.assertTrue((destroyed_state == correct_state).all())
 
         ### weak agent attacking a strong agent
-        failed_attack_action = {'actor': model.schedule.agents[0], 
-                                'type': model.schedule.agents[1]}
+        failed_attack_action = {'actor': 0, 
+                                'type': 1}
 
         intact_state = ipomdp.transition(state=model_state,
                                          action=failed_attack_action,
@@ -76,7 +80,7 @@ class TestIPOMDP(unittest.TestCase):
         self.assertTrue((intact_state == correct_state).all())
 
         ### hiding action
-        hiding_action = {'actor': model.schedule.agents[4], 
+        hiding_action = {'actor': 4, 
                          'type': 'hide'}
 
         hidden_state = ipomdp.transition(state=model_state,
@@ -98,12 +102,12 @@ class TestIPOMDP(unittest.TestCase):
         self.assertTrue((hidden_state == correct_state).all())
 
         ### skip action
-        skip_action = {'actor': model.schedule.agents[3], 
+        skip_action = {'actor': 3, 
                        'type': '-'}
 
         skipped_state = ipomdp.transition(state=model_state,
-                                         action=skip_action,
-                                         model=model)
+                                          action=skip_action,
+                                          model=model)
 
         # correct agent states
         c_agent_0_state = np.array([11, 0.5, 0.6, 20]) # weak agent
