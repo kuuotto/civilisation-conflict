@@ -584,6 +584,16 @@ def update_beliefs_1(belief, agent_action, agent_observation, agent, model):
                                          observation=agent_observation)
                         for p_p_i_state, action in zip(propagated_i_states, actions)])
 
+    if weights.sum() == 0:
+        # TODO: this is a problem. This means that none of the samples in the
+        # level 1 beliefs capture the situation where the given observation
+        # is possible. For example, the observation contains a technosignature
+        # observation from a civilisation which none of the samples think is
+        # possible for agent to observe.
+        # Possible solution could be to randomly sample new belief states. But
+        # how to ensure they have positive probability?
+        raise Exception("No beliefs are compatible with this observation!")
+
     # normalise weights
     weights = weights / weights.sum()
 
