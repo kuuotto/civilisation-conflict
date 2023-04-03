@@ -142,19 +142,21 @@ class Civilisation(mesa.Agent):
         - "ipomdp"
         """
         ### Choose an action
-        if self.model.decision_making == "ipodmp":
+        if self.model.decision_making == "ipomdp":
             action = optimal_action(belief=self.belief,
                                     agent=self.unique_id,
                                     actor=self.unique_id,
                                     time_horizon=self.model.planning_time_horizon,
                                     level=1,
                                     model=self.model,
-                                    return_sample=True)['type']
+                                    return_sample=True)[0]['type']
         elif self.model.decision_making == "random":
             
             neighbours = self.get_neighbouring_agents()
             action = self.rng.choice(['-', 'hide'] + 
                                      [nbr.unique_id for nbr in neighbours])
+        else:
+            raise NotImplementedError("Only 'random' and 'ipomdp' are supported")
 
         ### Perform and log action
         if isinstance(action, int):
