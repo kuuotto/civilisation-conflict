@@ -113,6 +113,10 @@ class Civilisation(mesa.Agent):
         Update beliefs regarding technology level and hostility of 
         neighbours.
         """
+        # no need to update on the first step
+        if self.model.schedule.time == 0:
+            return
+
         # determine the observation received by agent
         obs = sample_observation(state=self.model.get_state(),
                                  action=self.model.previous_action,
@@ -365,8 +369,8 @@ class Universe(mesa.Model):
         # method)
         self._init_state()
 
-        # keep track of the last action (initial value doesn't really matter)
-        self.previous_action = {'actor': self.schedule.agents[0], 'type': '-'}
+        # keep track of the last action
+        self.previous_action = None
 
     def step(self):
         """Advance the model by one step."""

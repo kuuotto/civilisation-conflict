@@ -1,27 +1,34 @@
 import unittest
 import numpy as np
 from model import ipomdp
-from model.model import Universe, sigmoid_growth
+from model.model import Universe
+from model.growth import sigmoid_growth
+
+def create_small_universe(**kwargs):
+    params = {'n_agents': 3,
+              'agent_growth': sigmoid_growth,
+              'agent_growth_params': {'speed_range': (0.3, 1),
+                                      'takeoff_time_range': (10, 100)},
+              'rewards': {'destroyed': -1, 'hide': -0.01, 'attack': 0},
+              'n_belief_samples': 10,
+              'obs_noise_sd': 0.05,
+              'belief_update_time_horizon': 1,
+              'planning_time_horizon': 2,
+              'action_dist_0': 'random',
+              'discount_factor': 0.9,
+              'decision_making': 'random',
+              'visibility_multiplier': 0.5}
+
+    params.update(**kwargs)
+
+    model = Universe(**params)
+    return model
 
 class TestIPOMDP(unittest.TestCase):
 
     def test_transition_1(self):
 
-        params = {'n_agents': 3,
-                'agent_growth': sigmoid_growth,
-                'agent_growth_params': {'speed_range': (0.3, 1),
-                                        'takeoff_time_range': (10, 100)},
-                'rewards': {'destroyed': -1, 'hide': -0.01, 'attack': 0},
-                'n_belief_samples': 30,
-                'obs_noise_sd': 0.05,
-                'belief_update_time_horizon': 1,
-                'planning_time_horizon': 2,
-                'action_dist_0': 'random',
-                'discount_factor': 0.9,
-                'decision_making': 'random',
-                'visibility_multiplier': 0.5}
-
-        model = Universe(**params)
+        model = create_small_universe(visibility_multiplier=0.5)
 
         agent_0_state = np.array([10, 0.5, 0.6, 20]) # weak agent
         agent_1_state = np.array([53, 1.0, 0.9, 30]) # strong agent
@@ -122,6 +129,25 @@ class TestIPOMDP(unittest.TestCase):
                                   c_agent_4_state,), axis=0)
 
         self.assertTrue((skipped_state == correct_state).all())
+
+    def test_correct_self_beliefs(self):
+
+        # initialise a Universe
+        model = create_small_universe()
+
+        # step model for a few steps
+        for _ in range(3):
+            model.step()
+
+        # check that every agent's updated beliefs match their state
+        for agent in model.schedule.agents:
+            agent.step_update_beliefs()
+
+            # check that beliefs match the agent state
+            if not (agent.belief[:, 0, agent.unique_id, :] ==
+                    agent.get_state()).all():
+                raise Exception("Beliefs and state differ")
+
 
 if __name__ == '__main__':
     unittest.main()
