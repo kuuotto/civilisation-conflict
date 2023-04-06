@@ -20,8 +20,11 @@ params = {'n_agents': 3,
           'planning_time_horizon': 2,
           'action_dist_0': 'random',
           'discount_factor': 0.9,
+          'visibility_multiplier': 0.5,
           'decision_making': 'random',
-          'visibility_multiplier': 0.5}
+          'init_age_belief_range': (10, 100),
+          'init_age_range': (10, 100),
+          'init_visibility_belief_range': (0, 1)}
 n_steps = 100
 
 # create a universe

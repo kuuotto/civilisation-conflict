@@ -57,7 +57,8 @@ class Civilisation(mesa.Agent):
 
         # initialise reset time, which is updated if the civilisation is 
         # destroyed
-        self.reset_time = 0
+        reset_time_range = (-self.model.init_age_range[1], -self.model.init_age_range[0])
+        self.reset_time = self.rng.integers(*reset_time_range, endpoint=True)
 
         # initialise visibility factor -- the civilisation can choose to hide 
         # which decreases its apparent tech level (=technosignature)
@@ -274,7 +275,8 @@ class Universe(mesa.Model):
     def __init__(self, n_agents, agent_growth, agent_growth_params, rewards,
                  n_belief_samples, obs_noise_sd, belief_update_time_horizon, 
                  planning_time_horizon, action_dist_0, discount_factor, 
-                 visibility_multiplier, decision_making,
+                 visibility_multiplier, decision_making, init_age_belief_range,
+                 init_age_range, init_visibility_belief_range, 
                  toroidal_space=False, debug=False, rng_seed=0
                 ) -> None:
         """
@@ -310,9 +312,14 @@ class Universe(mesa.Model):
         visibility_multiplier: how much a single “hide” action multiplies the
                                current agent visibility factor by
         decision_making: the method used by agents to make decisions. Options
-                         include "random" and "ipomdp" ("targeted" is 
-                         deprecated)
-        hostility_belief_prior: deprecated
+                         include "random" and "ipomdp".
+        init_age_belief_range: the range in which agents initially believe the
+                               ages of others are uniformly distributed
+        init_age_range: the range in which the ages of agents are initially
+                        uniformly distributed
+        init_visibility_belief_range: the range in which agents initially 
+                                      believe the visibility factors of others
+                                      are uniformly distributed
         toroidal_space: whether to use a toroidal universe topology
         debug: whether to print detailed debug information while model is run
         rng_seed: seed of the random number generator. Fixing the seed allows
@@ -331,6 +338,9 @@ class Universe(mesa.Model):
         self.discount_factor = discount_factor
         self.visibility_multiplier = visibility_multiplier
         self.decision_making = decision_making
+        self.init_age_belief_range = init_age_belief_range
+        self.init_age_range = init_age_range
+        self.init_visibility_belief_range = init_visibility_belief_range
         self.debug = debug
         
         # initialise random number generator

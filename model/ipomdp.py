@@ -273,12 +273,9 @@ def sample_observation(state, action, agent, model, n_samples):
 
     if len(nbr_ids) > 0:
         nbr_technosignatures = agent_tech_levels[nbr_ids] * state[nbr_ids, 1]
-
-        nbr_observations = model.rng.multivariate_normal(
-                            mean=nbr_technosignatures,
-                            cov=model.obs_noise_sd**2 * np.eye(len(nbr_ids)),
-                            size=n_samples)
-        sample[:, nbr_ids] = nbr_observations
+        noise = model.rng.normal(loc=0, scale=model.obs_noise_sd, 
+                                 size=len(nbr_ids))
+        sample[:, nbr_ids] = nbr_technosignatures + noise
 
     if n_samples == 1:
         return sample[0]
@@ -333,8 +330,10 @@ def sample_init(n_samples, level, agent, agent_state, model):
     # initialise array of samples
     if level == 0:
         sample = np.zeros((n_samples, n_agents, k))
+        size = (n_samples, n_agents)
     elif level == 1:
         sample = np.zeros((n_samples, 1 + (n_agents - 1)*n_samples, n_agents, k))
+        size = (n_samples, 1 + (n_agents - 1) * n_samples, n_agents)
     else:
         raise NotImplementedError("Levels above 1 are not supported")
 
@@ -356,35 +355,23 @@ def sample_init(n_samples, level, agent, agent_state, model):
         else:
             raise Exception("Sigmoid growth parameters are incorrect")
 
+    # initial age distribution
+    sample[..., 0] = model.rng.integers(*model.init_age_belief_range,
+                                        size=size, endpoint=True)
+
+    # initial visibility distribution
+    sample[..., 1] = model.rng.uniform(*model.init_visibility_belief_range,
+                                       size=size)
+
+    if model.agent_growth == sigmoid_growth:
+        sample[..., 2] = model.rng.uniform(*speed_range, size=size)
+        sample[..., 3] = model.rng.integers(*takeoff_time_range, size=size, 
+                                            endpoint=True)
+
+    # agent is certain about its own state in all samples
     if level == 0:
-
-        # in every sample and every agent, initial time is 0
-        sample[:, :, 0] = 0
-        # likewise, initially everyone has a visibility factor of 1
-        sample[:, :, 1] = 1
-
-        if model.agent_growth == sigmoid_growth:
-            sample[:, :, 2] = model.rng.uniform(*speed_range, 
-                                                size=(n_samples, n_agents))
-            sample[:, :, 3] = model.rng.integers(*takeoff_time_range, 
-                                                 size=(n_samples, n_agents))
-
-            # agent is certain about it's own state
-            sample[:, agent, :] = agent_state
-
+        sample[:, agent, :] = agent_state
     elif level == 1:
-
-        sample[:, :, :, 0] = 0
-        sample[:, :, :, 1] = 1
-
-        if model.agent_growth == sigmoid_growth:
-            sample[:, :, :, 2] = model.rng.uniform(*speed_range,
-                size=(n_samples, 1 + (n_agents - 1) * n_samples, n_agents))
-            sample[:, :, :, 3] = model.rng.integers(*takeoff_time_range,
-                size=(n_samples, 1 + (n_agents - 1) * n_samples, n_agents))
-
-        # agent is certain about it's own state in its own beliefs about the
-        # environment
         sample[:, 0, agent, :] = agent_state
 
     return sample

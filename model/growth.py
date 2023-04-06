@@ -24,5 +24,4 @@ def sigmoid_growth(time, speed, takeoff_time):
     Arguments can be individual numbers of NumPy arrays of equal length.
     """
     exponent = -speed * (time - takeoff_time)
-    # clip avoid overflows in exp
-    return 1/(1+np.exp(exponent.clip(max=10)))
+    return 1/(1+np.exp(exponent))
