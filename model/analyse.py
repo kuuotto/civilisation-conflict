@@ -4,6 +4,9 @@ def count_streaks(data):
     data should be a pandas Series which contains the 
     time stamps of the events of interest.
     """
+    if len(data) == 0:
+        return dict()
+
     prev_t = data[0]
     streak = 1
     streaks = dict()

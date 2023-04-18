@@ -1,6 +1,7 @@
 # %%
-from model import Universe
-from visualise import (draw_universe, plot_technology_distribution, 
+from model.model import Universe
+from model.growth import sigmoid_growth
+from model.visualise import (draw_universe, plot_technology_distribution, 
                        plot_streak_length_distribution)
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -8,17 +9,28 @@ from tqdm import tqdm
 # %% Run model and gather data
 
 # parameters
-params = {'num_steps': 500,
-          'num_agents': 20,
-          'decision_making': 'targeted',
-          'hostility_belief_prior': 0.1,
-          'speed_range': (0.3, 1),
-          'takeoff_time_range': (10, 100)}
+params = {'n_agents': 3,
+          'agent_growth': sigmoid_growth,
+          'agent_growth_params': {'speed_range': (0.3, 1),
+                                  'takeoff_time_range': (10, 100)},
+          'rewards': {'destroyed': -1, 'hide': -0.01, 'attack': 0},
+          'n_belief_samples': 10,
+          'obs_noise_sd': 0.05,
+          'belief_update_time_horizon': 1,
+          'planning_time_horizon': 2,
+          'action_dist_0': 'random',
+          'discount_factor': 0.9,
+          'visibility_multiplier': 0.5,
+          'decision_making': 'random',
+          'init_age_belief_range': (10, 100),
+          'init_age_range': (10, 100),
+          'init_visibility_belief_range': (0, 1)}
+n_steps = 100
 
 # create a universe
 model = Universe(debug=False, **params)
 # simulate
-for i in tqdm(range(params["num_steps"])):
+for i in tqdm(range(n_steps)):
     model.step()
 
 # retrieve data
@@ -27,7 +39,7 @@ action_data = model.datacollector.get_table_dataframe("actions")
 
 # %% Visualise model run
 vis = draw_universe(data=data, action_data=action_data, 
-                    anim_filename="output.mp4", 
+                    anim_filename="output/output.mp4", 
                     anim_length=60)
 plt.show()
 

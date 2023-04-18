@@ -6,8 +6,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from matplotlib.animation import ArtistAnimation
-from model import TechBelief
-from analyse import count_streaks
+from model.model import TechBelief
+from model.analyse import count_streaks
 
 def draw_universe(model=None, data=None, action_data=None, 
                   colormap=mpl.colormaps['Dark2'], anim_filename=None,
