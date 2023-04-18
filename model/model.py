@@ -158,8 +158,8 @@ class Civilisation(mesa.Agent):
         elif self.model.decision_making == "random":
             
             neighbours = self.get_neighbouring_agents()
-            action = self.rng.choice(['-', 'hide'] + 
-                                     [nbr.unique_id for nbr in neighbours])
+            options = ['-', 'hide'] + [nbr.unique_id for nbr in neighbours]
+            action = options[self.rng.choice(len(options))]
         else:
             raise NotImplementedError("Only 'random' and 'ipomdp' are supported")
 
@@ -188,6 +188,9 @@ class Civilisation(mesa.Agent):
                  'action': '-'}, 
                 ignore_missing=True)
 
+        else:
+            raise Exception("Unrecognised action")
+
         self.previous_agent_action = action
         self.model.previous_action = {'actor': self.unique_id,
                                       'type': action}
@@ -204,7 +207,7 @@ class Civilisation(mesa.Agent):
                  self.rng.random() > 0.5)):
                 
             # civilisation is destroyed
-            self.reset_time = self.model.schedule.time
+            self.reset_time = self.model.schedule.time + 1
             self.step_tech_level()
             self.visibility_factor = 1
             # beliefs will be reset at the beginning of the next round, because

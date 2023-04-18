@@ -3,6 +3,20 @@ import numpy as np
 from model.growth import influence_radius, sigmoid_growth
 from scipy.stats import multivariate_normal
 
+def _norm_pdf(x, mean, sd):
+    """
+    Calculate the pdf of the (univariate) normal distribution with given
+    parameters.
+
+    This is roughly 10x faster than using scipy.stats.norm.pdf
+
+    Keyword arguments:
+    x: where to calculate the density, can be a NumPy array
+    mean: mean of the distribution
+    sd: standard deviation of the distribution
+    """
+    return (1/(sd*np.sqrt(2*np.pi)))*np.exp(-(1/2)*((x-mean)/sd)**2)
+
 def tech_level(state, model):
     """
     Calculate the tech level(s) of the agent(s) in state. 
@@ -97,6 +111,9 @@ def transition(state, action, model, in_place=False):
                 state[sample, act['type'], 0] = 0 # reset time
                 state[sample, act['type'], 1] = 1 # visibility factor
 
+        elif act['type'] != "-":
+            raise Exception("Incorrect action format")
+
     # return only a single state if a single state was supplied
     if state.shape[0] == 1:
         state = state[0]
@@ -153,10 +170,10 @@ def prob_observation(observation, state, action, agent, model):
     observation noise, which is saved in the model's obs_noise_sd attribute.
 
     Keyword arguments:
-    observation: a NumPy array of length n_agents or n_agents + 1. The latter
-                 corresponds to an observation where an attacker gets to know
-                 the result of their attack last round (0 or 1). This binary
-                 value is the last value in the array. A numpy.NaN 
+    observation: a NumPy array of length n_agents + k or n_agents + k + 1. The ¨
+                 latter corresponds to an observation where an attacker gets 
+                 to know the result of their attack last round (0 or 1). This 
+                 binary value is the last value in the array. A numpy.NaN 
                  denotes a civilisation that agent cannot observe yet, or the
                  agent itself.
     state: a NumPy array of size n_agents x k, where k is the size of an
@@ -169,43 +186,63 @@ def prob_observation(observation, state, action, agent, model):
     """
     n_agents = state.shape[0]
 
+    if model.agent_growth == sigmoid_growth:
+        k = 4
+    else:
+        raise NotImplementedError()
+
+    # check that if the agent attacked last round, the observation contains a 
+    # bit indicating the success of the attack
+    # TODO: later this check can probably be removed
+    if (action['actor'] == agent and
+        isinstance(action['type'], int) and
+        (len(observation) != n_agents + k + 1 or
+         observation[-1] not in (0, 1))):
+        raise Exception("Erroneous observation")
+
+    # check that the observation of the agent's own state matches the model state
+    if not (observation[n_agents : n_agents + k] == state[agent]).all():
+        return 0
+
     # calculate tech levels
     agent_tech_levels = tech_level(state=state, model=model)
 
     # make sure that observation only contains observations on civilisations 
     # that agent can see
+    # TODO: this can be optimised by keeping an array of distances in the
+    # model object.
     nbr_ids = [nbr.unique_id
                for nbr in model.space.get_neighbors(
                    pos=model.schedule.agents[agent].pos,
                    radius=influence_radius(agent_tech_levels[agent]),
                    include_center=False)]
-    nbr_obs = observation[nbr_ids]
-    unobserved_obs = np.delete((observation if observation.shape[0] == n_agents
-                                            else observation[:-1]), 
-                               nbr_ids)
-
-    if np.isnan(nbr_obs).any() or not np.isnan(unobserved_obs).all():
-        #print("nans are wrong", np.isnan(nbr_obs).any(), not np.isnan(unobserved_obs).all(), nbr_ids, observation)
-        return 0
-
-    # check that if the agent attacked last round, the observation contains a 
-    # bit indicating the success of the attack
-    if (action['actor'] == agent and
-        isinstance(action['type'], int) and
-        (len(observation) != n_agents + 1 or
-         observation[-1] not in (0, 1))):
-        return 0
 
     # if there are no neighbours, then there is only one possible observation
     if len(nbr_ids) == 0:
         return 1
 
+    # check that agent got observations only from those it can reach
+    for ag_id in range(n_agents):
+
+        if ag_id == agent:
+            continue
+
+        is_neighbour = ag_id in nbr_ids
+
+        if is_neighbour and np.isnan(observation[ag_id]):
+            return 0
+
+        if not is_neighbour and not np.isnan(observation[ag_id]):
+            return 0
+
+
     # return density of multivariate normal. Observations from neighbours are
     # independent, centered around their respective technosignatures and
     # have a variance of obs_noise_sd^2
     # technosignature is a product of visibility factor and tech level
+    # TODO: this can be optimised by not using the SciPy implementation of pdf
     nbr_technosignatures = agent_tech_levels[nbr_ids] * state[nbr_ids, 1]
-    density = multivariate_normal.pdf(nbr_obs, 
+    density = multivariate_normal.pdf(observation[nbr_ids], 
                                       mean=nbr_technosignatures,
                                       cov=model.obs_noise_sd**2)
 
@@ -214,7 +251,11 @@ def prob_observation(observation, state, action, agent, model):
 def sample_observation(state, action, agent, model, n_samples):
     """
     Returns n_samples of possible observations of “agent” when the system is
-    currently in state “state” and the previous action was “action”.
+    currently in state “state” and the previous action was “action”. 
+    Observations include technosignatures from all civilisations (n_agents
+    values, where agent's own value is np.nan), the state of agent in “state”
+    (k values) and, if the agent attacked someone last round, a bit indicating
+    success.
 
     Model's random number generator (rng attribute) is used for sampling.
 
@@ -233,8 +274,8 @@ def sample_observation(state, action, agent, model, n_samples):
     n_samples: number of observation samples to generate
 
     Returns:
-    The observations. A NumPy array of size  n_samples x 
-    (n_agents or n_agents + 1). The latter corresponds to an observation 
+    The observations. A NumPy array of size n_samples x (n_agents + k or 
+    n_agents + k + 1). The latter corresponds to an observation 
     where an attacker gets to know the result of their attack last round 
     (0 or 1). This binary value is the last value in the array. A numpy.NaN 
     denotes a civilisation that agent cannot observe yet, or the agent itself.
@@ -242,24 +283,29 @@ def sample_observation(state, action, agent, model, n_samples):
     """
     assert(len(state.shape) == 2)
 
-    n_agents = state.shape[0]
-    obs_length = n_agents
+    if model.agent_growth == sigmoid_growth:
+        k = 4
+    else:
+        raise NotImplementedError()
 
+    n_agents = model.n_agents
     # if agent has attacked another last round, we need to include a result
     # bit in each observation
-    if action['actor'] == agent and isinstance(action['type'], int):
-        obs_length = n_agents + 1
-
-        # determine if target was destroyed
-        target_id = action['type']
-        target_destroyed = int(state[target_id, 0] == 0)
+    include_success_bit = action['actor'] == agent and isinstance(action['type'], int)
+    obs_length = n_agents + k + include_success_bit
 
     # initialise array
     sample = np.full(shape=(n_samples, obs_length), fill_value=np.nan)
 
     # add success bit if necessary
-    if obs_length == n_agents + 1:
+    if include_success_bit:
+        # determine if target was destroyed
+        target_id = action['type']
+        target_destroyed = int(state[target_id, 0] == 0)
         sample[:, -1] = target_destroyed
+
+    # add agent's own state
+    sample[:, n_agents : n_agents + k] = state[agent]
 
     # calculate tech levels
     agent_tech_levels = tech_level(state=state, model=model)
@@ -306,8 +352,9 @@ def sample_init(n_samples, level, agent, agent_state, model):
     about the environment.
 
     Note that the agent always has correct beliefs about its own part of the
-    environment state (although it's beliefs about others' beliefs of course
-    don't have to be correct in general)
+    environment state. What is more, this applies on all levels of beliefs:
+    if agent i believes something about agent j's state at level 1, then it
+    also believes j has the same belief about its own state at level 0.
 
     Keyword arguments:
     n_samples: number of samples to generate
@@ -374,6 +421,22 @@ def sample_init(n_samples, level, agent, agent_state, model):
     elif level == 1:
         sample[:, 0, agent, :] = agent_state
 
+    # match level 1 and 0 beliefs (see note in docstring)
+    if level == 1:
+
+        for i in range(n_samples):
+            for other_agent in range(n_agents):
+
+                if other_agent == agent:
+                    continue
+
+                other_agent_ind = other_agent - (other_agent > agent)
+
+                sample[i,
+                       1 + n_samples*(other_agent_ind):
+                       1 + n_samples*(other_agent_ind+1),
+                       other_agent, :] = sample[i, 0, other_agent, :]
+
     return sample
 
 def update_beliefs_0(belief, agent_action, agent_observation, agent,
@@ -412,42 +475,72 @@ def update_beliefs_0(belief, agent_action, agent_observation, agent,
     array of size (n_samples, n_agents, k)
     """
     n_samples = belief.shape[0]
+    n_agents = model.n_agents
 
     # calculate influence radii of civilisations in the different samples
     # this is of shape (n_samples, n_agents)
     radii = influence_radius(tech_level(state=belief, model=model))
 
     # sample others' actions, one for each sample
-    if model.action_dist_0 == "random":
+    if agent_action == None:
 
-        if agent_action == None:
-            # if agent didn't act, then one other civilisation is randomly
-            # chosen to act and one of their possible actions is randomly 
-            # chosen
+        # list that will eventually be of length n_samples
+        states = []
+        actions = []
+
+        if model.action_dist_0 == "random":
+            # randomly sample actions from all possibilities
+
+            # heuristic: if agent was destroyed, only sample attacks
+            agent_destroyed = agent_observation[n_agents] == 0
+            if agent_destroyed:
+                base_actions = []
+            else:
+                base_actions = ['hide', '-']
+
             other_agents = [ag for ag in model.schedule.agents
                             if ag.unique_id != agent]
-            actors = model.rng.choice(other_agents, size=n_samples)
-            
-            # list of lists
-            actors_nbrs = [model.space.get_neighbors(
-                    pos=actor.pos,
-                    radius=radii[sample, actor.unique_id],
-                    include_center=False)
-                for sample, actor in enumerate(actors)]
-            actor_actions = [model.rng.choice(['hide', '-'] +
-                                              [nbr.unique_id for nbr in actor_nbrs])
-                             for actor_nbrs in actors_nbrs]
-        
-            actions = [{'actor': actor.unique_id, 'type': action}
-                       for actor, action in zip(actors, actor_actions)]
 
+            for i in range(n_samples):
+
+                # randomly sample an action in this state
+                possible_actions = []
+
+                for other_agent in other_agents:
+                    other_id = other_agent.unique_id
+
+                    other_agent_nbrs = [ag.unique_id 
+                                        for ag in model.space.get_neighbors(
+                                            pos=other_agent.pos,
+                                            radius=radii[i, other_id],
+                                            include_center=False)]
+
+                    if agent_destroyed and agent in other_agent_nbrs:
+                        possible_actions.append({'actor': other_id, 
+                                                 'type': agent})
+
+                    elif not agent_destroyed:
+                        possible_actions.extend([{'actor': other_id,
+                                                  'type': action} 
+                                                for action in base_actions + 
+                                                            other_agent_nbrs])
+
+                if len(possible_actions) == 0:
+                    continue
+
+                states.append(i)
+                actions.append(model.rng.choice(possible_actions))
+
+            if len(states) == 0:
+                raise Exception("There were no possible actions")
+
+            belief = belief[states]
         else:
-            # if agent acted, then the others cannot do anything
-            actions = n_samples * [{'actor': agent, 'type': agent_action}]
+            raise NotImplementedError()
 
     else:
-        raise NotImplementedError()
-
+        # if agent acted, then the others cannot do anything
+        actions = n_samples * [{'actor': agent, 'type': agent_action}]
 
     # propagate all sample states forward using the sampled actions
     propagated_states = transition(state=belief, action=actions, model=model,
@@ -495,7 +588,7 @@ def update_beliefs_1(belief, agent_action, agent_observation, agent, model):
     environment state.
 
     Model's random number generator (rng attribute) is used for sampling
-    other's actions and for resampling.
+    others' actions and for resampling.
 
     Keyword arguments:
     belief: a sample of level 1 interactive states. A NumPy array of size 
@@ -543,13 +636,13 @@ def update_beliefs_1(belief, agent_action, agent_observation, agent, model):
                         level=0,
                         model=model,
                         return_sample=True)[0]
-                   for ag_id, ind in other_agents
-                   for i_state in belief]
+                   for i_state in belief
+                   for ag_id, ind in other_agents]
 
         n_actions = len(other_agents)
 
     else:
-        # if agent acted, then the others cannot do anything
+        # if agent acted, then the others could not have done anything
         actions = [{'actor': agent, 'type': agent_action} for i_state in belief]
         n_actions = 1
 
@@ -557,10 +650,11 @@ def update_beliefs_1(belief, agent_action, agent_observation, agent, model):
     # repeat also creates a copy of belief so the original belief will not
     # be altered
     propagated_i_states = belief.repeat(repeats=n_actions, axis=0)
-    transition(state=propagated_i_states[:, 0, :, :],
-               action=actions,
-               model=model,
-               in_place=True)
+    propagated_i_states [:, 0, :, :] = transition(
+        state=propagated_i_states[:, 0, :, :],
+        action=actions,
+        model=model,
+        in_place=True)
 
     # calculate associated weights, which depend on how compatible the state-
     # action combination is with the given observation
@@ -734,8 +828,9 @@ def optimal_action(belief, agent, actor, time_horizon, level, model,
                                         include_center=False)
                         
                         action = {'actor': actor, 
-                                  'type': model.rng.choice(['hide', '-'] + 
-                                        [nbr.unique_id for nbr in actor_nbrs])}
+                                  'type': (['hide', '-'] + 
+                                           [nbr.unique_id for nbr in actor_nbrs])[
+                                            model.rng.choice(2+len(actor_nbrs))]}
                     
                     else:
                         raise NotImplementedError()
@@ -802,4 +897,3 @@ def optimal_action(belief, agent, actor, time_horizon, level, model,
         best_actions = model.rng.choice(best_actions)
 
     return best_actions, max_util
-    
