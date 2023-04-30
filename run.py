@@ -18,19 +18,21 @@ params = {'n_agents': 3,
           'obs_noise_sd': 0.05,
           'belief_update_time_horizon': 1,
           'planning_time_horizon': 2,
+          'reasoning_level': 2,
           'action_dist_0': 'random',
           'discount_factor': 0.9,
           'visibility_multiplier': 0.5,
           'decision_making': 'random',
           'init_age_belief_range': (10, 100),
           'init_age_range': (10, 100),
-          'init_visibility_belief_range': (0, 1)}
+          'init_visibility_belief_range': (1, 1),
+          'init_visibility_range': (1, 1)}
 n_steps = 100
 
 # create a universe
 model = Universe(debug=False, **params)
 # simulate
-for i in tqdm(range(n_steps)):
+for id in tqdm(range(n_steps)):
     model.step()
 
 # retrieve data

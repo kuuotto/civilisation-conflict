@@ -4,83 +4,43 @@ import numpy as np
 from model.growth import influence_radius, sigmoid_growth
 from model.ipomdp import (optimal_action, sample_init, sample_observation,
                           update_beliefs_1)
+from model.ipomdp_solver import BeliefForest
 
-
-def prob_smaller(rv1, rv2, n_samples=100, include_equal=False):
-    """
-    Uses Monte Carlo sampling to determine the probability for the event
-    rv1 < rv2.
-
-    Arguments:
-    rv1, rv2: callables that return i.i.d. random samples from the variables,
-              should have a keyword argument "size" for number of samples.
-              Should return a NumPy array.
-    n_samples: number of samples to draw from each random variable
-    """
-    sample1 = rv1(size=n_samples)
-    sample2 = rv2(size=n_samples)
-    return np.mean(sample1 <= sample2) if include_equal else np.mean(sample1 < sample2)
-
-class TechBelief():
-    """Helper class for converting distributions into the range [0,1]"""
-
-    def __init__(self, rng, p, n=10):
-        '''
-        p is the p parameter of a binomial distribution, which is used to 
-        represent technology beliefs
-        '''
-        self.p = p
-        self.n = n
-        self.rng = rng
-
-    def rvs(self, size):
-        return self.rng.binomial(n=self.n, p=self.p, size=size) / self.n
-
-    def support():
-        return np.linspace(0, 1, 11).round(1)
 
 class Civilisation(mesa.Agent):
     """An agent represeting a single civilisation in the universe"""
 
-    def __init__(self, unique_id, model) -> None:
+    def __init__(self, unique_id, model, reasoning_level: int, age: int, 
+                 visibility_factor: float, agent_growth_params) -> None:
         """
         Initialise a civilisation.
 
         Keyword arguments:
         unique_id: integer, uniquely identifies this civilisation
         model: a Universe object which this civilisation belongs to
+        reasoning_level: 
         """
         super().__init__(unique_id, model)
+
+        # “id” is nicer than “unique_id”
+        self.id = unique_id
 
         # add reference to model's rng
         self.rng = model.rng
 
-        # initialise reset time, which is updated if the civilisation is 
-        # destroyed
-        reset_time_range = (-self.model.init_age_range[1], -self.model.init_age_range[0])
-        self.reset_time = self.rng.integers(*reset_time_range, endpoint=True)
+        # initialise reset time, which is the “zero time” for this civilisation.
+        # It is set to the current model time if the civilisation is destroyed.
+        self.reset_time = -age
 
         # initialise visibility factor -- the civilisation can choose to hide 
         # which decreases its apparent tech level (=technosignature)
-        self.visibility_factor = 1
+        self.visibility_factor = visibility_factor
 
-        # if model was supplied with ranges of values for sigmoid growth,
-        # randomly choose civilisation's parameter values from those ranges
-        if (model.agent_growth == sigmoid_growth and
-                "speed_range" in model.agent_growth_params and
-                "takeoff_time_range" in model.agent_growth_params):
+        # save growth parameters
+        self.agent_growth_params = agent_growth_params
 
-            speed_range = model.agent_growth_params["speed_range"]
-            takeoff_time_range = model.agent_growth_params["takeoff_time_range"]
-
-            self.agent_growth_params = {
-                'speed': self.rng.uniform(*speed_range),
-                'takeoff_time': self.rng.integers(*takeoff_time_range,
-                                                  endpoint=True)}
-
-        else:
-            # save agent growth parameters from the model
-            self.agent_growth_params = model.agent_growth_params
+        # save ipomdp reasoning level
+        self.level = reasoning_level
 
         # initialise own tech level
         self.step_tech_level()
@@ -88,16 +48,13 @@ class Civilisation(mesa.Agent):
         # initialise own state (see a description of the state in the 
         # get_state method)
         self._init_state()
-
-        # initialise beliefs
-        self.belief = sample_init(n_samples=model.n_belief_samples,
-                                  level=1,
-                                  agent=unique_id,
-                                  agent_state=self.get_state(),
-                                  model=model)
         
         # keep track of previous action
         self.previous_agent_action = None
+
+    def initialise_forest(self):
+        """Create belief trees"""
+        self.forest = BeliefForest(owner=self, agents=self.model.agents)
 
     def step_tech_level(self):
         """Update own tech level"""
@@ -233,7 +190,7 @@ class Civilisation(mesa.Agent):
     def get_neighbouring_agents(self):
         return self.model.space.get_neighbors(pos=self.pos, 
                                               radius=self.influence_radius, 
-                                              include_center=False)     
+                                              include_center=False)
 
     def dprint(self, *message):
         """Prints message to the console if debugging flag is on"""
@@ -271,15 +228,19 @@ class Civilisation(mesa.Agent):
         return self._state
 
     def __str__(self):
-        return f"{self.unique_id}"
+        return f'{self.id}'
+
+    def __repr__(self):
+        return f'Civ {self.id}'
 
 class Universe(mesa.Model):
 
     def __init__(self, n_agents, agent_growth, agent_growth_params, rewards,
                  n_belief_samples, obs_noise_sd, belief_update_time_horizon, 
-                 planning_time_horizon, action_dist_0, discount_factor, 
-                 visibility_multiplier, decision_making, init_age_belief_range,
-                 init_age_range, init_visibility_belief_range, 
+                 planning_time_horizon, reasoning_level, action_dist_0, 
+                 discount_factor, visibility_multiplier, decision_making, 
+                 init_age_belief_range, init_age_range, 
+                 init_visibility_belief_range, init_visibility_range, 
                  toroidal_space=False, debug=False, rng_seed=0
                 ) -> None:
         """
@@ -306,6 +267,7 @@ class Universe(mesa.Model):
                                     out what others did when updating beliefs
         planning_time_horizon: how many steps to look ahead when planning our
                                own action
+        reasoning_level: the level of ipomdp reasoning all civilisations use
         action_dist_0: the method agents assume others use to figure out which
                        actions other agents choose. "random" means the others'
                        actions are chosen uniformly over the set of possible
@@ -319,10 +281,13 @@ class Universe(mesa.Model):
         init_age_belief_range: the range in which agents initially believe the
                                ages of others are uniformly distributed
         init_age_range: the range in which the ages of agents are initially
-                        uniformly distributed
+                        uniformly distributed. Typically (0, 0)
         init_visibility_belief_range: the range in which agents initially 
                                       believe the visibility factors of others
                                       are uniformly distributed
+        init_visibility_range: the range in which the visibility factors of 
+                               agents are initialy uniformly distributed. 
+                               Typically (1, 1)
         toroidal_space: whether to use a toroidal universe topology
         debug: whether to print detailed debug information while model is run
         rng_seed: seed of the random number generator. Fixing the seed allows
@@ -337,6 +302,7 @@ class Universe(mesa.Model):
         self.obs_noise_sd = obs_noise_sd
         self.belief_update_time_horizon = belief_update_time_horizon
         self.planning_time_horizon = planning_time_horizon
+        self.reasoning_level = reasoning_level
         self.action_dist_0 = action_dist_0
         self.discount_factor = discount_factor
         self.visibility_multiplier = visibility_multiplier
@@ -344,6 +310,7 @@ class Universe(mesa.Model):
         self.init_age_belief_range = init_age_belief_range
         self.init_age_range = init_age_range
         self.init_visibility_belief_range = init_visibility_belief_range
+        self.init_visibility_range = init_visibility_range
         self.debug = debug
         
         # initialise random number generator
@@ -358,14 +325,43 @@ class Universe(mesa.Model):
                                                 torus=toroidal_space)
 
         # add agents
-        for i in range(n_agents):
-            agent = Civilisation(i, self)
+        for id in range(n_agents):
+
+            # choose the age of the civilisation
+            age = self.rng.integers(*init_age_range, endpoint=True)
+
+            # choose visibility factor of the civilisation
+            visibility_factor = self.rng.uniform(*init_visibility_range)
+
+            # choose the growth parameters of the civilisation
+            if (agent_growth == sigmoid_growth and
+                "speed_range" in agent_growth_params and
+                "takeoff_time_range" in agent_growth_params):
+
+                speed_range = agent_growth_params["speed_range"]
+                takeoff_time_range = agent_growth_params["takeoff_time_range"]
+
+                growth_params = {
+                    'speed': self.rng.uniform(*speed_range),
+                    'takeoff_time': self.rng.integers(*takeoff_time_range,
+                                                      endpoint=True)}
+            else:
+                growth_params = agent_growth_params
+
+            agent = Civilisation(unique_id=id, model=self, 
+                                 reasoning_level=reasoning_level, age=age, 
+                                 visibility_factor=visibility_factor,
+                                 agent_growth_params=growth_params)
             self.schedule.add(agent)
 
             # place agent in a randomly chosen position
             # TODO: consider the distribution of stars
             x, y = self.rng.random(size=2)
             self.space.place_agent(agent, (x, y))
+
+        # after all agents have been created, initialise their trees
+        for agent in self.agents:
+            agent.initialise_forest()
 
         # initialise data collection
         self.datacollector = mesa.DataCollector(
@@ -378,8 +374,7 @@ class Universe(mesa.Model):
             tables={'actions': ['time', 'actor', 'action', 'attack_target', 
                                 'attack_successful']})
 
-        # initialise model state (see a detailed description in the get_state
-        # method)
+        # initialise model state
         self._init_state()
 
         # keep track of the last action
@@ -409,6 +404,10 @@ class Universe(mesa.Model):
             self._state[i] = agent.get_state()
 
         return self._state
+
+    @property
+    def agents(self):
+        return self.schedule.agents
 
 class SingleActivation(mesa.time.BaseScheduler):
     """
