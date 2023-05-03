@@ -2,6 +2,7 @@ import unittest
 import numpy as np
 from model import ipomdp
 from tests.helpers import create_small_universe
+from model.growth import sigmoid_growth
 
 class TestIPOMDP(unittest.TestCase):
 
@@ -109,23 +110,47 @@ class TestIPOMDP(unittest.TestCase):
 
         self.assertTrue((skipped_state == correct_state).all())
 
-    # def test_correct_self_beliefs(self):
+    def test_initial_belief(self):
 
-    #     # initialise a Universe
-    #     model = create_small_universe()
+        model = create_small_universe(n_agents=5,
+                                      agent_growth=sigmoid_growth,
+                                      agent_growth_params=
+                                        {'speed_range': (0.5, 1),
+                                         'takeoff_time_range': (10, 20)},
+                                      init_age_belief_range=(50, 100),
+                                      init_visibility_belief_range=(0, 0.2),
+                                      rng_seed=None)
+        agent = model.agents[0]
 
-    #     # step model for a few steps
-    #     for _ in range(3):
-    #         model.step()
+        # generate belief
+        init_belief = ipomdp.sample_init(n_samples=3, 
+                                         model=model,
+                                         agent=agent)
 
-    #     # check that every agent's updated beliefs match their state
-    #     for agent in model.schedule.agents:
-    #         agent.step_update_beliefs()
+        # check shape
+        correct_shape = (3, 5, 4)
+        self.assertEqual(correct_shape, init_belief.shape)
 
-    #         # check that beliefs match the agent state
-    #         if not (agent.belief[:, 0, agent.unique_id, :] ==
-    #                 agent.get_state()).all():
-    #             raise Exception("Beliefs and state differ")
+        # check range of ages
+        ages = init_belief[:, 1:, 0]
+        self.assertTrue(((ages >= 50) & (ages <= 100)).all())
+
+        # check range of visibilities
+        visibilities = init_belief[:, 1:, 1]
+        self.assertTrue(((visibilities >= 0) & (visibilities <= 0.2)).all())
+
+        # check range of growth speeds
+        speeds = init_belief[:, 1:, 2]
+        self.assertTrue(((speeds >= 0.5) & (speeds <= 1)).all())
+
+        # check range of takeoff times
+        takeoff_times = init_belief[:, 1:, 3]
+        self.assertTrue(((takeoff_times >= 10) & (takeoff_times <= 20)).all())
+
+        # check that agent's own state is correct
+        correct_state = agent.get_state()
+        belief_agent_state = init_belief[:, 0, :]
+        self.assertTrue((correct_state == belief_agent_state).all())
 
 
 if __name__ == '__main__':

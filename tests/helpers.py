@@ -1,3 +1,4 @@
+# %%
 from model.model import Universe
 from model.growth import sigmoid_growth
 
@@ -7,7 +8,7 @@ def create_small_universe(**kwargs):
               'agent_growth_params': {'speed_range': (0.3, 1),
                                       'takeoff_time_range': (10, 100)},
               'rewards': {'destroyed': -1, 'hide': -0.01, 'attack': 0},
-              'n_belief_samples': 10,
+              'n_root_belief_samples': 10,
               'obs_noise_sd': 0.05,
               'belief_update_time_horizon': 1,
               'planning_time_horizon': 2,

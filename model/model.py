@@ -6,6 +6,7 @@ from model.ipomdp import (optimal_action, sample_init, sample_observation,
                           update_beliefs_1)
 from model.ipomdp_solver import BeliefForest
 
+# %%
 
 class Civilisation(mesa.Agent):
     """An agent represeting a single civilisation in the universe"""
@@ -236,7 +237,7 @@ class Civilisation(mesa.Agent):
 class Universe(mesa.Model):
 
     def __init__(self, n_agents, agent_growth, agent_growth_params, rewards,
-                 n_belief_samples, obs_noise_sd, belief_update_time_horizon, 
+                 n_root_belief_samples, obs_noise_sd, belief_update_time_horizon, 
                  planning_time_horizon, reasoning_level, action_dist_0, 
                  discount_factor, visibility_multiplier, decision_making, 
                  init_age_belief_range, init_age_range, 
@@ -254,13 +255,8 @@ class Universe(mesa.Model):
         agent_growth_params: see above
         rewards: a dictionary of rewards with keys 'destroyed', 'hide' and 
                  'attack' and the rewards as values
-        n_belief_samples: the number of samples (particles) in the beliefs of 
-                          each agent. If n_belief_samples=10, each agent holds
-                          10 samples representing their beliefs about the
-                          environment state and for each of those, they hold
-                          10 samples for each other agent representing their
-                          beliefs about the others' beliefs about the 
-                          environment state
+        n_root_belief_samples: the number of samples (particles) used in 
+                               representing beliefs at root nodes of trees
         obs_noise_sd: standard deviation of technosignature observation noise
                       (which follows an unbiased normal distribution)
         belief_update_time_horizon: how many steps to look ahead when figuring
@@ -298,7 +294,7 @@ class Universe(mesa.Model):
         self.agent_growth = agent_growth
         self.agent_growth_params = agent_growth_params
         self.rewards = rewards
-        self.n_belief_samples = n_belief_samples
+        self.n_root_belief_samples = n_root_belief_samples
         self.obs_noise_sd = obs_noise_sd
         self.belief_update_time_horizon = belief_update_time_horizon
         self.planning_time_horizon = planning_time_horizon

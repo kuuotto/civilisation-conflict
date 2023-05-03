@@ -1,7 +1,19 @@
 # %%
+
+# avoids having to give type annotations as strings
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # avoid circular imports with type hints
+    from model.model import Universe, Civilisation
+
 import numpy as np
 from model.growth import influence_radius, sigmoid_growth
 from scipy.stats import multivariate_normal
+
+# %%
 
 def _norm_pdf(x, mean, sd):
     """
@@ -328,43 +340,23 @@ def sample_observation(state, action, agent, model, n_samples):
 
     return sample
 
-def sample_init(n_samples, level, agent, agent_state, model):
+
+def sample_init(n_samples: int, model: Universe, agent : Civilisation = None):
     """
-    Samples the initial beliefs of an agent.
-
-    If level = 0, agents only have beliefs about the environment states. 
-    Each environment state is an array of size n_agents x k, where k is 
-    the length of an individual agent state (typically k=4 for sigmoid growth).
-    Therefore, the sample will be a NumPy array of size 
-    n_samples x n_agents x k.
-
-    If level = 1, agents have beliefs about the environment states and beliefs
-    about others' beliefs about the environment states. So for every environment
-    state (size n_agents x k) that we sample, there are also associated 
-    belief distributions about what others believe about the environment. These 
-    distributions are represented by samples (of size n_samples) from each of
-    these distributions. There are n_agents - 1 of these distributions. The 
-    resulting NumPy array will be of size
-        n_samples x (1 + (n_agents - 1) * n_samples) x n_agents x k
-    where in the outer parentheses the 1 represents the original agent's 
-    environment sample, the (n_agents - 1) is the number of other agents, each 
-    of which has a sample of size n_samples representing that agents belief
-    about the environment.
-
-    Note that the agent always has correct beliefs about its own part of the
-    environment state. What is more, this applies on all levels of beliefs:
-    if agent i believes something about agent j's state at level 1, then it
-    also believes j has the same belief about its own state at level 0.
+    Generates n_samples samples of the initial belief. These samples are used
+    to represent the initial belief distribution of agents.
 
     Keyword arguments:
-    n_samples: number of samples to generate
-    level: level of interactive beliefs of the agent. 0 or 1
-    agent: the id of the Civilisation whose initial beliefs are sampled
-    agent_state: the initial state of the agent (a NumPy array of length k)
-    model: a Universe
+    n_samples: the number of samples to return
+    model: used to access the agent growth function (which determines the shape 
+           of states) and other parameters 
+    agent: if provided, the state of the agent in the states is replaced with
+           the true state of the agent. This is used at the highest level tree, 
+           where there is certainty about the true state of the agent.
 
     Returns:
-    A NumPy array (see description above for the size)
+    a NumPy array of shape (n_samples, n_agents, k), where k is the size of 
+    an individual agent state representation.
     """
     n_agents = model.n_agents
 
@@ -375,14 +367,16 @@ def sample_init(n_samples, level, agent, agent_state, model):
         raise NotImplementedError()
 
     # initialise array of samples
-    if level == 0:
-        sample = np.zeros((n_samples, n_agents, k))
-        size = (n_samples, n_agents)
-    elif level == 1:
-        sample = np.zeros((n_samples, 1 + (n_agents - 1)*n_samples, n_agents, k))
-        size = (n_samples, 1 + (n_agents - 1) * n_samples, n_agents)
-    else:
-        raise NotImplementedError("Levels above 1 are not supported")
+    sample = np.zeros((n_samples, n_agents, k))
+    size = (n_samples, n_agents)
+
+    # initial age distribution
+    sample[..., 0] = model.rng.integers(*model.init_age_belief_range,
+                                        size=size, endpoint=True)
+
+    # initial visibility distribution
+    sample[..., 1] = model.rng.uniform(*model.init_visibility_belief_range,
+                                       size=size)
 
     # determine the values or range of the growth parameters
     if model.agent_growth == sigmoid_growth:
@@ -402,40 +396,14 @@ def sample_init(n_samples, level, agent, agent_state, model):
         else:
             raise Exception("Sigmoid growth parameters are incorrect")
 
-    # initial age distribution
-    sample[..., 0] = model.rng.integers(*model.init_age_belief_range,
-                                        size=size, endpoint=True)
-
-    # initial visibility distribution
-    sample[..., 1] = model.rng.uniform(*model.init_visibility_belief_range,
-                                       size=size)
-
-    if model.agent_growth == sigmoid_growth:
+        # sample from the ranges
         sample[..., 2] = model.rng.uniform(*speed_range, size=size)
         sample[..., 3] = model.rng.integers(*takeoff_time_range, size=size, 
                                             endpoint=True)
 
-    # agent is certain about its own state in all samples
-    if level == 0:
-        sample[:, agent, :] = agent_state
-    elif level == 1:
-        sample[:, 0, agent, :] = agent_state
-
-    # match level 1 and 0 beliefs (see note in docstring)
-    if level == 1:
-
-        for i in range(n_samples):
-            for other_agent in range(n_agents):
-
-                if other_agent == agent:
-                    continue
-
-                other_agent_ind = other_agent - (other_agent > agent)
-
-                sample[i,
-                       1 + n_samples*(other_agent_ind):
-                       1 + n_samples*(other_agent_ind+1),
-                       other_agent, :] = sample[i, 0, other_agent, :]
+    # if provided, agent is certain about its own state in all samples
+    if agent is not None:
+        sample[:, agent.id, :] = agent.get_state()
 
     return sample
 
