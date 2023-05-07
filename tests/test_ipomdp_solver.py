@@ -1,14 +1,16 @@
 import unittest
-from tests.helpers import create_small_universe
-from model.growth import sigmoid_growth
+
 import numpy as np
+from model import growth
+from tests import helpers
+
 
 class TestIPOMDPSolver(unittest.TestCase):
 
     def test_forest_structure_1(self):
         
         # create model with two agents and level 2 reasoning
-        model = create_small_universe(n_agents=2, reasoning_level=2)
+        model = helpers.create_small_universe(n_agents=2, reasoning_level=2)
         agent_0, agent_1 = model.agents
         
         ### check the trees of agent 0
@@ -28,7 +30,7 @@ class TestIPOMDPSolver(unittest.TestCase):
     def test_forest_structure_2(self):
         
         # create model with three agents and level 2 reasoning
-        model = create_small_universe(n_agents=3, reasoning_level=2)
+        model = helpers.create_small_universe(n_agents=3, reasoning_level=2)
         agent_0, agent_1, agent_2 = model.agents
         
         ### check the trees of agent 0
@@ -67,9 +69,9 @@ class TestIPOMDPSolver(unittest.TestCase):
     def test_root_node_initial_belief(self):
 
         # create model with two agents and level 2 reasoning
-        model = create_small_universe(n_agents=2, reasoning_level=2, 
-                                      agent_growth=sigmoid_growth,
-                                      n_root_belief_samples=5)
+        model = helpers.create_small_universe(n_agents=2, reasoning_level=2, 
+                                              agent_growth=growth.sigmoid_growth,
+                                              n_root_belief_samples=5)
         a0, a1 = model.agents
 
         ### check trees for agent 0
@@ -84,10 +86,14 @@ class TestIPOMDPSolver(unittest.TestCase):
             self.assertIn((), tree.root_nodes)
             node = tree.root_nodes[()]
 
-            # check the shape of the root belief array
-            self.assertIsInstance(node.root_belief, np.ndarray)
-            correct_shape = (5, 2, 4)
-            self.assertEqual(correct_shape, node.root_belief.shape)
+            # check the number of particles
+            self.assertEqual(len(node.particles), 5)
+
+            # check the shape of samples
+            for particle in node.particles:
+                self.assertIsInstance(particle.state, np.ndarray)
+                correct_shape = (2, 4)
+                self.assertEqual(correct_shape, particle.state.shape)
 
         ### check trees for agent 1
         trees_to_check = ((a1,), (a1, a0), (a1, a0, a1))
@@ -101,7 +107,11 @@ class TestIPOMDPSolver(unittest.TestCase):
             self.assertIn((), tree.root_nodes)
             node = tree.root_nodes[()]
 
-            # check the shape of the root belief array
-            self.assertIsInstance(node.root_belief, np.ndarray)
-            correct_shape = (5, 2, 4)
-            self.assertEqual(correct_shape, node.root_belief.shape)
+            # check the number of particles
+            self.assertEqual(len(node.particles), 5)
+
+            # check the shape of samples
+            for particle in node.particles:
+                self.assertIsInstance(particle.state, np.ndarray)
+                correct_shape = (2, 4)
+                self.assertEqual(correct_shape, particle.state.shape)

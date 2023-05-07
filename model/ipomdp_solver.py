@@ -9,15 +9,14 @@ from model.ipomdp import sample_init
 
 if TYPE_CHECKING:
     # avoid circular imports with type hints
-    from model.model import Civilisation
+    import model.civilisation as civilisation
 
-    AgentAction = Union[str, Civilisation, None]
-    Action = Set[Tuple[Civilisation, AgentAction]]
+    AgentAction = Union[str, civilisation.Civilisation, None]
+    Action = Set[Tuple[civilisation.Civilisation, AgentAction]]
+    JointActionHistory = Tuple[Action, ...]
     State = NDArray
     Observation = NDArray
     Belief = NDArray
-
-# %%
 
 class Scene(TypedDict):
     state: State
@@ -31,7 +30,8 @@ class BeliefForest:
     beliefs about the environment and others' beliefs.
     """
 
-    def __init__(self, owner: Civilisation, agents: List[Civilisation]) -> None:
+    def __init__(self, owner: civilisation.Civilisation, 
+                 agents: List[civilisation.Civilisation]) -> None:
         """
         Keyword arguments:
         owner - the agent that uses the forest to reason
@@ -51,9 +51,9 @@ class BeliefForest:
                                 agents=agents)
 
     def create_child_trees(self, parent_tree_level: int, 
-                           parent_tree_agent: Civilisation, 
-                           parent_tree_signature: Tuple[Civilisation, ...], 
-                           agents: List[Civilisation],
+                           parent_tree_agent: civilisation.Civilisation, 
+                           parent_tree_signature: Tuple[civilisation.Civilisation, ...], 
+                           agents: List[civilisation.Civilisation],
                            ) -> None:
         """
         Create trees for the opponents of agent who is at the given level.
@@ -85,7 +85,7 @@ class Tree:
     tree).
     """
 
-    def __init__(self, agent: Civilisation, top_level: bool = False) -> None:
+    def __init__(self, agent: civilisation.Civilisation, top_level: bool = False) -> None:
         """
         Initialise the tree.
 
@@ -101,22 +101,48 @@ class Tree:
         init_belief = sample_init(n_samples=model.n_root_belief_samples,
                                   model=model,
                                   agent=agent if top_level else None)
-        self.root_nodes = {(): Node(root_belief=init_belief)}
+        self.root_nodes = {(): Node(initial_belief=init_belief)}
 
 class Node:
     """
     A single node in a tree. Corresponds to a specific agent action history.
     """
 
-    def __init__(self, root_belief: Belief = None) -> None:
+    def __init__(self, initial_belief: Belief = None) -> None:
         """
         Initialise the node.
 
         Keyword arguments:
-        root_belief: set of (unweighted) states representing the initial belief 
-                     in this tree. Applicable only if this node is a root node.
+        initial_belief: set of (unweighted) states representing the initial 
+                        belief in this tree. Applicable only if this node is a 
+                        root node with empty action history
         """
-        self.particles = {}
+        self.particles = set()
 
-        if root_belief is not None:
-            self.root_belief = root_belief
+        if initial_belief is not None:
+            # this is a new node corresponding to an empty action history
+
+            # create particles representing this belief
+            particles = {Particle(state=state, 
+                                  joint_action_history=(), 
+                                  weight=1) 
+                         for state in initial_belief}
+            self.particles.update(particles)
+
+class Particle:
+    """
+    A particle consists of a model state, a joint action history, the next
+    agent action (can be empty) and a weight to represent belief (can be empty).
+    """
+
+    def __init__(self, state: State, joint_action_history: JointActionHistory,
+                 next_agent_action: AgentAction = None, weight: int = None) -> None:
+        self.state = state
+        self.joint_action_history = joint_action_history
+        self.next_agent_action = next_agent_action # can be None
+        self.weight = weight # can be None
+
+    def __repr__(self):
+        return (f"Particle(ages {self.state[:, 0]}, " + 
+                f"{self.joint_action_history}, {self.next_agent_action}, " +
+                f"{self.weight})")

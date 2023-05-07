@@ -6,7 +6,6 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from matplotlib.animation import ArtistAnimation
-from model.model import TechBelief
 from model.analyse import count_streaks
 
 def draw_universe(model=None, data=None, action_data=None, 
@@ -178,7 +177,10 @@ def get_technology_distribution_step(data, step, normalise=False):
     """
 
     # initialise distribution
-    dist = {tech: 0 for tech in TechBelief.support()}
+    # TODO: this needs to support continuous technology levels
+    raise NotImplementedError()
+    #dist = {tech: 0 for tech in TechBelief.support()}
+    dist = {tech: 0 for tech in range(0, 1, 0.1)}
 
     # collect data and update distribution
     step_data = data.xs(step, level="Step")['Technology']

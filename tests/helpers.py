@@ -1,10 +1,10 @@
 # %%
-from model.model import Universe
-from model.growth import sigmoid_growth
+import model.universe as universe
+import model.growth as growth
 
 def create_small_universe(**kwargs):
     params = {'n_agents': 3,
-              'agent_growth': sigmoid_growth,
+              'agent_growth': growth.sigmoid_growth,
               'agent_growth_params': {'speed_range': (0.3, 1),
                                       'takeoff_time_range': (10, 100)},
               'rewards': {'destroyed': -1, 'hide': -0.01, 'attack': 0},
@@ -24,4 +24,4 @@ def create_small_universe(**kwargs):
 
     params.update(**kwargs)
 
-    return Universe(**params)
+    return universe.Universe(**params)

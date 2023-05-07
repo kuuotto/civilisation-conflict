@@ -7,13 +7,12 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # avoid circular imports with type hints
-    from model.model import Universe, Civilisation
+    import model.universe as universe
+    import model.civilisation as civilisation
 
 import numpy as np
-from model.growth import influence_radius, sigmoid_growth
+import model.growth as growth
 from scipy.stats import multivariate_normal
-
-# %%
 
 def _norm_pdf(x, mean, sd):
     """
@@ -43,10 +42,10 @@ def tech_level(state, model):
     model - a Universe with a corresponding agent growth function saved in
             its agent_growth attribute
     """
-    if model.agent_growth == sigmoid_growth:
-        return sigmoid_growth(time=state[..., 0],
-                              speed=state[..., 2],
-                              takeoff_time=state[..., 3])
+    if model.agent_growth == growth.sigmoid_growth:
+        return growth.sigmoid_growth(time=state[..., 0],
+                                     speed=state[..., 2],
+                                     takeoff_time=state[..., 3])
     else:
         raise NotImplementedError()
 
@@ -198,7 +197,7 @@ def prob_observation(observation, state, action, agent, model):
     """
     n_agents = state.shape[0]
 
-    if model.agent_growth == sigmoid_growth:
+    if model.agent_growth == growth.sigmoid_growth:
         k = 4
     else:
         raise NotImplementedError()
@@ -226,7 +225,7 @@ def prob_observation(observation, state, action, agent, model):
     nbr_ids = [nbr.unique_id
                for nbr in model.space.get_neighbors(
                    pos=model.schedule.agents[agent].pos,
-                   radius=influence_radius(agent_tech_levels[agent]),
+                   radius=growth.influence_radius(agent_tech_levels[agent]),
                    include_center=False)]
 
     # if there are no neighbours, then there is only one possible observation
@@ -295,7 +294,7 @@ def sample_observation(state, action, agent, model, n_samples):
     """
     assert(len(state.shape) == 2)
 
-    if model.agent_growth == sigmoid_growth:
+    if model.agent_growth == growth.sigmoid_growth:
         k = 4
     else:
         raise NotImplementedError()
@@ -326,7 +325,7 @@ def sample_observation(state, action, agent, model, n_samples):
     nbr_ids = [nbr.unique_id
                for nbr in model.space.get_neighbors(
                    pos=model.schedule.agents[agent].pos,
-                   radius=influence_radius(agent_tech_levels[agent]),
+                   radius=growth.influence_radius(agent_tech_levels[agent]),
                    include_center=False)]
 
     if len(nbr_ids) > 0:
@@ -341,7 +340,8 @@ def sample_observation(state, action, agent, model, n_samples):
     return sample
 
 
-def sample_init(n_samples: int, model: Universe, agent : Civilisation = None):
+def sample_init(n_samples: int, model: universe.Universe, 
+                agent : civilisation.Civilisation = None):
     """
     Generates n_samples samples of the initial belief. These samples are used
     to represent the initial belief distribution of agents.
@@ -361,7 +361,7 @@ def sample_init(n_samples: int, model: Universe, agent : Civilisation = None):
     n_agents = model.n_agents
 
     # determine the number of values needed to describe an agent
-    if model.agent_growth == sigmoid_growth:
+    if model.agent_growth == growth.sigmoid_growth:
         k = 4
     else:
         raise NotImplementedError()
@@ -379,7 +379,7 @@ def sample_init(n_samples: int, model: Universe, agent : Civilisation = None):
                                        size=size)
 
     # determine the values or range of the growth parameters
-    if model.agent_growth == sigmoid_growth:
+    if model.agent_growth == growth.sigmoid_growth:
 
         if ("speed" in model.agent_growth_params and 
             "takeoff_time" in model.agent_growth_params):
@@ -447,7 +447,7 @@ def update_beliefs_0(belief, agent_action, agent_observation, agent,
 
     # calculate influence radii of civilisations in the different samples
     # this is of shape (n_samples, n_agents)
-    radii = influence_radius(tech_level(state=belief, model=model))
+    radii = growth.influence_radius(tech_level(state=belief, model=model))
 
     # sample others' actions, one for each sample
     if agent_action == None:
@@ -728,7 +728,7 @@ def optimal_action(belief, agent, actor, time_horizon, level, model,
             agent_state = belief[0, agent, :]
 
         # calculate agent's influence radius
-        radius = influence_radius(tech_level(state=agent_state, model=model))
+        radius = growth.influence_radius(tech_level(state=agent_state, model=model))
 
         # get all neighbours
         agent_nbrs = model.space.get_neighbors(pos=model.schedule.agents[agent].pos,
@@ -787,7 +787,7 @@ def optimal_action(belief, agent, actor, time_horizon, level, model,
                     if model.action_dist_0 == "random":
 
                         actor_state = i_state[actor]
-                        actor_influence_radius = influence_radius(
+                        actor_influence_radius = growth.influence_radius(
                             tech_level(state=actor_state, model=model))
 
                         actor_nbrs = model.space.get_neighbors(

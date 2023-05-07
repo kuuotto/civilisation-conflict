@@ -1,14 +1,14 @@
 import unittest
 import numpy as np
 from model import ipomdp
-from tests.helpers import create_small_universe
-from model.growth import sigmoid_growth
+from tests import helpers
+from model import growth
 
 class TestIPOMDP(unittest.TestCase):
 
     def test_transition_1(self):
 
-        model = create_small_universe(visibility_multiplier=0.5)
+        model = helpers.create_small_universe(visibility_multiplier=0.5)
 
         agent_0_state = np.array([10, 0.5, 0.6, 20]) # weak agent
         agent_1_state = np.array([53, 1.0, 0.9, 30]) # strong agent
@@ -112,14 +112,14 @@ class TestIPOMDP(unittest.TestCase):
 
     def test_initial_belief(self):
 
-        model = create_small_universe(n_agents=5,
-                                      agent_growth=sigmoid_growth,
-                                      agent_growth_params=
-                                        {'speed_range': (0.5, 1),
-                                         'takeoff_time_range': (10, 20)},
-                                      init_age_belief_range=(50, 100),
-                                      init_visibility_belief_range=(0, 0.2),
-                                      rng_seed=None)
+        model = helpers.create_small_universe(n_agents=5,
+                                              agent_growth=growth.sigmoid_growth,
+                                              agent_growth_params=
+                                                {'speed_range': (0.5, 1),
+                                                 'takeoff_time_range': (10, 20)},
+                                              init_age_belief_range=(50, 100),
+                                              init_visibility_belief_range=(0, 0.2),
+                                              rng_seed=None)
         agent = model.agents[0]
 
         # generate belief
