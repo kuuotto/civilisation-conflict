@@ -1,8 +1,6 @@
 # %%
 import matplotlib.pyplot as plt
-import model.growth as growth
-import model.universe as universe
-import model.visualise as visualise
+from model import growth, universe, visualise
 from tqdm import tqdm
 
 # %% Run model and gather data
