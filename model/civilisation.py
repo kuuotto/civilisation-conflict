@@ -1,9 +1,6 @@
 import mesa
 import numpy as np
-
-import model.growth as growth
-import model.ipomdp as ipomdp
-import model.ipomdp_solver as ipomdp_solver
+from model import growth, ipomdp, ipomdp_solver
 
 class Civilisation(mesa.Agent):
     """An agent represeting a single civilisation in the universe"""

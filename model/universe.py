@@ -1,8 +1,7 @@
 import mesa
 import numpy as np
 
-import model.civilisation as civilisation
-import model.growth as growth
+from model import civilisation, growth
 
 class Universe(mesa.Model):
 

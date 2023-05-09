@@ -78,19 +78,19 @@ class TestIPOMDPSolver(unittest.TestCase):
         trees_to_check = ((a0,), (a0, a1), (a0, a1, a0))
 
         for tree_signature in trees_to_check:
-            # check that there is a top-level tree
+            # check that the tree exists
             self.assertIn(tree_signature, a0.forest.trees)
             tree = a0.forest.trees[tree_signature]
 
-            # check that the top-level tree has a root node
+            # check that the tree has a root node
             self.assertIn((), tree.root_nodes)
             node = tree.root_nodes[()]
 
-            # check the number of particles
-            self.assertEqual(len(node.particles), 5)
+            # check the number of particles in the root node belief
+            self.assertEqual(len(node.belief), 5)
 
             # check the shape of samples
-            for particle in node.particles:
+            for particle in node.belief:
                 self.assertIsInstance(particle.state, np.ndarray)
                 correct_shape = (2, 4)
                 self.assertEqual(correct_shape, particle.state.shape)
@@ -99,16 +99,16 @@ class TestIPOMDPSolver(unittest.TestCase):
         trees_to_check = ((a1,), (a1, a0), (a1, a0, a1))
 
         for tree_signature in trees_to_check:
-            # check that there is a top-level tree
+            # check that the tree exists
             self.assertIn(tree_signature, a1.forest.trees)
             tree = a1.forest.trees[tree_signature]
 
-            # check that the top-level tree has a root node
+            # check that the tree has a root node
             self.assertIn((), tree.root_nodes)
             node = tree.root_nodes[()]
 
-            # check the number of particles
-            self.assertEqual(len(node.particles), 5)
+            # check the number of particles in the root node belief
+            self.assertEqual(len(node.belief), 5)
 
             # check the shape of samples
             for particle in node.particles:

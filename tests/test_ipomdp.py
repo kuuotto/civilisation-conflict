@@ -1,8 +1,7 @@
 import unittest
 import numpy as np
-from model import ipomdp
 from tests import helpers
-from model import growth
+from model import growth, ipomdp
 
 class TestIPOMDP(unittest.TestCase):
 

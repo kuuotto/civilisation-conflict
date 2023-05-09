@@ -6,7 +6,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from matplotlib.animation import ArtistAnimation
-from model.analyse import count_streaks
+from model import analyse
 
 def draw_universe(model=None, data=None, action_data=None, 
                   colormap=mpl.colormaps['Dark2'], anim_filename=None,
@@ -231,7 +231,10 @@ def plot_technology_distribution(data, **params):
               displayed under the plot as a caption.
     """
     fig, ax = plt.subplots(constrained_layout=True, figsize=(5,5))
-    tech_levels = TechBelief.support()
+    # TODO: this needs to support continuous technology levels
+    raise NotImplementedError()
+    #tech_levels = TechBelief.support()
+    tech_levels = range(0, 1, 0.1)
     steps = data.index.get_level_values("Step").unique()
 
     # initialise array
@@ -271,7 +274,7 @@ def plot_streak_length_distribution(action_data, **params):
     fig, ax = plt.subplots(constrained_layout=True, figsize=(5,5))
 
     # count streaks
-    streaks = count_streaks(action_data[action_data.action == 'a']['time'].values)
+    streaks = analyse.count_streaks(action_data[action_data.action == 'a']['time'].values)
     
     # visualise
     ax.scatter(x=list(streaks.keys()), y=list(streaks.values()))

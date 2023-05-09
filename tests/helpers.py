@@ -1,6 +1,5 @@
 # %%
-import model.universe as universe
-import model.growth as growth
+from model import universe, growth
 
 def create_small_universe(**kwargs):
     params = {'n_agents': 3,

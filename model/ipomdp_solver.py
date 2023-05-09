@@ -5,11 +5,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, TypedDict, Tuple, Union, List, Set
 from numpy.typing import NDArray
-from model.ipomdp import sample_init
+from model import ipomdp, growth
 
 if TYPE_CHECKING:
     # avoid circular imports with type hints
-    import model.civilisation as civilisation
+    from model import civilisation, universe
 
     AgentAction = Union[str, civilisation.Civilisation, None]
     Action = Set[Tuple[civilisation.Civilisation, AgentAction]]
@@ -98,51 +98,66 @@ class Tree:
         model = agent.model
 
         # create root node corresponding to empty agent action history
-        init_belief = sample_init(n_samples=model.n_root_belief_samples,
-                                  model=model,
-                                  agent=agent if top_level else None)
-        self.root_nodes = {(): Node(initial_belief=init_belief)}
+        init_belief = ipomdp.sample_init(n_samples=model.n_root_belief_samples,
+                                         model=model,
+                                         agent=agent if top_level else None)
+        self.root_nodes = {(): Node(initial_belief=init_belief, model=model)}
 
 class Node:
     """
     A single node in a tree. Corresponds to a specific agent action history.
+
+    A node contains a set of particles, which have each been previously
+    sampled from a belief and then propagated forward with the I-POMDP
+    transition function. In addition, a node at the root of the tree contains
+    a separate set of particles corresponding to the belief of the tree agent
+    regarding the current state of the world.
     """
 
-    def __init__(self, initial_belief: Belief = None) -> None:
+    def __init__(self, model: universe.Universe, 
+                 initial_belief: Belief = None) -> None:
         """
         Initialise the node.
 
         Keyword arguments:
+        model: a Universe
         initial_belief: set of (unweighted) states representing the initial 
                         belief in this tree. Applicable only if this node is a 
                         root node with empty action history
         """
         self.particles = set()
+        self.belief = set()
 
         if initial_belief is not None:
             # this is a new node corresponding to an empty action history
 
             # create particles representing this belief
             particles = {Particle(state=state, 
-                                  joint_action_history=(), 
+                                  joint_action_history=(),
+                                  model=model,
                                   weight=1) 
                          for state in initial_belief}
-            self.particles.update(particles)
+            self.belief.update(particles)
 
 class Particle:
     """
     A particle consists of a model state, a joint action history, the next
     agent action (can be empty) and a weight to represent belief (can be empty).
+    Also stores a reference to the model for convenience.
     """
 
     def __init__(self, state: State, joint_action_history: JointActionHistory,
-                 next_agent_action: AgentAction = None, weight: int = None) -> None:
+                 model: universe.Universe, next_agent_action: AgentAction = None, 
+                 weight: int = None) -> None:
         self.state = state
         self.joint_action_history = joint_action_history
         self.next_agent_action = next_agent_action # can be None
         self.weight = weight # can be None
+        self.model = model
 
     def __repr__(self):
-        return (f"Particle(ages {self.state[:, 0]}, " + 
+        levels = [round(growth.tech_level(state=agent_state, model=self.model), 2)
+                  for agent_state in self.state]
+        return (f"Particle(levels {levels}, " + 
                 f"{self.joint_action_history}, {self.next_agent_action}, " +
                 f"{self.weight})")

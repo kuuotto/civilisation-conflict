@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     import model.civilisation as civilisation
 
 import numpy as np
-import model.growth as growth
+from model import growth
 from scipy.stats import multivariate_normal
 
 def _norm_pdf(x, mean, sd):
@@ -27,27 +27,6 @@ def _norm_pdf(x, mean, sd):
     sd: standard deviation of the distribution
     """
     return (1/(sd*np.sqrt(2*np.pi)))*np.exp(-(1/2)*((x-mean)/sd)**2)
-
-def tech_level(state, model):
-    """
-    Calculate the tech level(s) of the agent(s) in state. 
-    
-    State can be an individual agent state (in which case a single tech level
-    is returned), a model state (in which case n_agents tech levels are 
-    returned) or a higher-dimensional collection of model states. 
-
-    Keyword arguments:
-    state - a NumPy array where the last dimension corresponds to an individual
-            agent state
-    model - a Universe with a corresponding agent growth function saved in
-            its agent_growth attribute
-    """
-    if model.agent_growth == growth.sigmoid_growth:
-        return growth.sigmoid_growth(time=state[..., 0],
-                                     speed=state[..., 2],
-                                     takeoff_time=state[..., 3])
-    else:
-        raise NotImplementedError()
 
 def transition(state, action, model, in_place=False):
     """
@@ -112,8 +91,8 @@ def transition(state, action, model, in_place=False):
             actor_state = state[sample, act['actor'], :]
             target_state = state[sample, act['type'], :]
 
-            actor_tech_level = tech_level(state=actor_state, model=model)
-            target_tech_level = tech_level(state=target_state, model=model)
+            actor_tech_level = growth.tech_level(state=actor_state, model=model)
+            target_tech_level = growth.tech_level(state=target_state, model=model)
 
             if (actor_tech_level > target_tech_level or
                 (actor_tech_level == target_tech_level and 
@@ -154,8 +133,8 @@ def reward(state, action, agent, model):
         if target == agent:
             
             # calculate tech levels of actor and target
-            actor_tech_level = tech_level(state=state[actor], model=model)
-            target_tech_level = tech_level(state=state[target], model=model)
+            actor_tech_level = growth.tech_level(state=state[actor], model=model)
+            target_tech_level = growth.tech_level(state=state[target], model=model)
 
             if target_tech_level < actor_tech_level:
                 return model.rewards['destroyed']
@@ -216,7 +195,7 @@ def prob_observation(observation, state, action, agent, model):
         return 0
 
     # calculate tech levels
-    agent_tech_levels = tech_level(state=state, model=model)
+    agent_tech_levels = growth.tech_level(state=state, model=model)
 
     # make sure that observation only contains observations on civilisations 
     # that agent can see
@@ -319,7 +298,7 @@ def sample_observation(state, action, agent, model, n_samples):
     sample[:, n_agents : n_agents + k] = state[agent]
 
     # calculate tech levels
-    agent_tech_levels = tech_level(state=state, model=model)
+    agent_tech_levels = growth.tech_level(state=state, model=model)
 
     # add observations from the civilisations the agent can see
     nbr_ids = [nbr.unique_id
@@ -447,7 +426,7 @@ def update_beliefs_0(belief, agent_action, agent_observation, agent,
 
     # calculate influence radii of civilisations in the different samples
     # this is of shape (n_samples, n_agents)
-    radii = growth.influence_radius(tech_level(state=belief, model=model))
+    radii = growth.influence_radius(growth.tech_level(state=belief, model=model))
 
     # sample others' actions, one for each sample
     if agent_action == None:
@@ -728,7 +707,8 @@ def optimal_action(belief, agent, actor, time_horizon, level, model,
             agent_state = belief[0, agent, :]
 
         # calculate agent's influence radius
-        radius = growth.influence_radius(tech_level(state=agent_state, model=model))
+        radius = growth.influence_radius(growth.tech_level(state=agent_state, 
+                                                           model=model))
 
         # get all neighbours
         agent_nbrs = model.space.get_neighbors(pos=model.schedule.agents[agent].pos,
@@ -788,7 +768,7 @@ def optimal_action(belief, agent, actor, time_horizon, level, model,
 
                         actor_state = i_state[actor]
                         actor_influence_radius = growth.influence_radius(
-                            tech_level(state=actor_state, model=model))
+                            growth.tech_level(state=actor_state, model=model))
 
                         actor_nbrs = model.space.get_neighbors(
                                         pos=model.schedule.agents[actor].pos,
