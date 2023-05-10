@@ -8,8 +8,8 @@ class Universe(mesa.Model):
     def __init__(self, n_agents, agent_growth, agent_growth_params, rewards,
                  n_root_belief_samples, obs_noise_sd, belief_update_time_horizon, 
                  planning_time_horizon, reasoning_level, action_dist_0, 
-                 discount_factor, visibility_multiplier, decision_making, 
-                 init_age_belief_range, init_age_range, 
+                 discount_factor, exploration_coef, visibility_multiplier, 
+                 decision_making, init_age_belief_range, init_age_range, 
                  init_visibility_belief_range, init_visibility_range, 
                  toroidal_space=False, debug=False, rng_seed=0
                 ) -> None:
@@ -39,6 +39,9 @@ class Universe(mesa.Model):
                        choices.
         discount_factor: how much future time steps are discounted when 
                          determining the rational actions of agents
+        exploration_coef: used in the MCTS (Monte Carlo Tree Search) based
+                          algorithm to adjust how much exploration of seldomly
+                          visited agent actions is emphasised
         visibility_multiplier: how much a single “hide” action multiplies the
                                current agent visibility factor by
         decision_making: the method used by agents to make decisions. Options
@@ -70,6 +73,7 @@ class Universe(mesa.Model):
         self.reasoning_level = reasoning_level
         self.action_dist_0 = action_dist_0
         self.discount_factor = discount_factor
+        self.exploration_coef = exploration_coef
         self.visibility_multiplier = visibility_multiplier
         self.decision_making = decision_making
         self.init_age_belief_range = init_age_belief_range

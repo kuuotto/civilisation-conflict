@@ -14,6 +14,7 @@ def create_small_universe(**kwargs):
               'reasoning_level': 2,
               'action_dist_0': 'random',
               'discount_factor': 0.9,
+              'exploration_coef': 1,
               'visibility_multiplier': 0.5,
               'decision_making': 'random',
               'init_age_belief_range': (10, 100),

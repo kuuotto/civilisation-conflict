@@ -1,13 +1,14 @@
 import unittest
 import numpy as np
 from tests import helpers
-from model import growth, ipomdp
+from model import growth, ipomdp, action
 
 class TestIPOMDP(unittest.TestCase):
 
     def test_transition_1(self):
 
-        model = helpers.create_small_universe(visibility_multiplier=0.5)
+        model = helpers.create_small_universe(n_agents=5, 
+                                              visibility_multiplier=0.5)
 
         agent_0_state = np.array([10, 0.5, 0.6, 20]) # weak agent
         agent_1_state = np.array([53, 1.0, 0.9, 30]) # strong agent
@@ -22,11 +23,10 @@ class TestIPOMDP(unittest.TestCase):
                                 agent_4_state), axis=0)
 
         ### strong attacking a weak agent
-        destroy_action = {'actor': 1, 
-                          'type': 0}
+        destroy_action = {model.agents[1]: model.agents[0]}
 
         destroyed_state = ipomdp.transition(state=model_state,
-                                            action=destroy_action,
+                                            action_=destroy_action,
                                             model=model)
 
         # correct agent states
@@ -44,11 +44,10 @@ class TestIPOMDP(unittest.TestCase):
         self.assertTrue((destroyed_state == correct_state).all())
 
         ### weak agent attacking a strong agent
-        failed_attack_action = {'actor': 0, 
-                                'type': 1}
+        failed_attack_action = {model.agents[0]: model.agents[1]}
 
         intact_state = ipomdp.transition(state=model_state,
-                                         action=failed_attack_action,
+                                         action_=failed_attack_action,
                                          model=model)
 
         # correct agent states
@@ -66,11 +65,10 @@ class TestIPOMDP(unittest.TestCase):
         self.assertTrue((intact_state == correct_state).all())
 
         ### hiding action
-        hiding_action = {'actor': 4, 
-                         'type': 'hide'}
+        hiding_action = {model.agents[4]: action.HIDE}
 
         hidden_state = ipomdp.transition(state=model_state,
-                                         action=hiding_action,
+                                         action_=hiding_action,
                                          model=model)
 
         # correct agent states
@@ -88,11 +86,10 @@ class TestIPOMDP(unittest.TestCase):
         self.assertTrue((hidden_state == correct_state).all())
 
         ### skip action
-        skip_action = {'actor': 3, 
-                       'type': '-'}
+        skip_action = {model.agents[3]: action.NO_ACTION}
 
         skipped_state = ipomdp.transition(state=model_state,
-                                          action=skip_action,
+                                          action_=skip_action,
                                           model=model)
 
         # correct agent states

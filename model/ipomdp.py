@@ -7,12 +7,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # avoid circular imports with type hints
-    import model.universe as universe
-    import model.civilisation as civilisation
+    from model import universe, ipomdp_solver
 
 import numpy as np
-from model import growth
-from scipy.stats import multivariate_normal
+from model import growth, action, civilisation
 
 def _norm_pdf(x, mean, sd):
     """
@@ -28,7 +26,10 @@ def _norm_pdf(x, mean, sd):
     """
     return (1/(sd*np.sqrt(2*np.pi)))*np.exp(-(1/2)*((x-mean)/sd)**2)
 
-def transition(state, action, model, in_place=False):
+def transition(state: ipomdp_solver.State, 
+               action_: ipomdp_solver.Action, 
+               model: universe.Universe, 
+               in_place=False) -> ipomdp_solver.State:
     """
     Given a model state and an action, this function samples from the
     distribution of all possible future states. In practice a (state, action) 
@@ -39,24 +40,14 @@ def transition(state, action, model, in_place=False):
     used as the transition function for all agents, as they all have the same 
     transition model.
 
-    Can also be supplied with multiple states and the same number of actions,
-    in which case the states are all propagated forward with the corresponding
-    actions.
-
     The random number generator of the model (the rng attribute) is used for
     random choices.
  
     Keyword arguments:
     state: representation of the system at time t-1. a NumPy array of size 
            (n_agents, k), where k is the length of an individual agent state
-           representation (k=4 for sigmoid growth). If multiple states are 
-           propagated simultaneously, should be of shape (n_samples, n_agents, 
-           k).
-    action: a dictionary, with keys 'actor' (the id of the acting Civilisation) 
-            and 'type' (either a string ('hide' for hiding or '-' for no 
-            action) or the id of a Civilisation that was attacked). 
-            If multiple states are supplied, this should be a list of length 
-            n_samples.
+           representation (k=4 for sigmoid growth).
+    action_: the action performed
     model: a Universe
     in_place: boolean, whether to change the state object directly
 
@@ -68,73 +59,67 @@ def transition(state, action, model, in_place=False):
     if not in_place:
         state = state.copy()
 
-    # if a single (state, action) combination is supplied, reshape
-    if len(state.shape) == 2:
-        state = state[np.newaxis]
-    if not isinstance(action, list):
-        action = [action]
-
-    # make sure we have the same number of states and actions
-    assert(len(state) == len(action))
+    # multiple actors are not yet supported
+    if len(action_.items()) > 1:
+        raise NotImplementedError("Multiple actors are not yet supported")
+    actor, actor_action = next(iter(action_.items()))
 
     # always tick everyone's time by one
-    state[:, :, 0] += 1
+    state[:, 0] += 1
 
-    for sample, act in enumerate(action):
-    
-        if act['type'] == 'hide':
-            # if actor hides, additionally update their visibility
-            state[sample, act['actor'], 1] *= model.visibility_multiplier
+    if actor_action == action.HIDE:
+        # if actor hides, additionally update their visibility
+        state[actor.id, 1] *= model.visibility_multiplier
 
-        elif isinstance(act['type'], int):
-            # if there is an attack, see if it is successful or not
-            actor_state = state[sample, act['actor'], :]
-            target_state = state[sample, act['type'], :]
+    elif isinstance(actor_action, civilisation.Civilisation):
+        # if there is an attack, see if it is successful or not
+        target = actor_action
+        actor_state = state[actor.id, :]
+        target_state = state[target.id, :]
 
-            actor_tech_level = growth.tech_level(state=actor_state, model=model)
-            target_tech_level = growth.tech_level(state=target_state, model=model)
+        actor_tech_level = growth.tech_level(state=actor_state, model=model)
+        target_tech_level = growth.tech_level(state=target_state, model=model)
 
-            if (actor_tech_level > target_tech_level or
-                (actor_tech_level == target_tech_level and 
-                 model.rng.random() > 0.5)):
-                # civilisation is destroyed
-                state[sample, act['type'], 0] = 0 # reset time
-                state[sample, act['type'], 1] = 1 # visibility factor
+        if (actor_tech_level > target_tech_level or
+            (actor_tech_level == target_tech_level and 
+                model.rng.random() > 0.5)):
+            # civilisation is destroyed
+            state[target.id, 0] = 0 # reset time
+            state[target.id, 1] = 1 # visibility factor
 
-        elif act['type'] != "-":
-            raise Exception("Incorrect action format")
-
-    # return only a single state if a single state was supplied
-    if state.shape[0] == 1:
-        state = state[0]
+    elif actor_action != action.NO_ACTION:
+        raise Exception("Incorrect action format")
 
     return state
 
-def reward(state, action, agent, model):
+def reward(state: ipomdp_solver.State, 
+           action_: ipomdp_solver.Action, 
+           agent: civilisation.Civilisation, 
+           model: universe.Universe) -> float:
     """
     Given the current environment state and an action taken in that state, 
     this function calculates the reward for an agent.
 
     Keyword arguments:
-    state: a NumPy array of size n_agents x k, where k is the size of an
-           individual agent's portion of the environment state
-    action: a dictionary, with keys 'actor' (the id of the acting Civilisation) 
-            and 'type' (either a string ('hide' for hiding or '-' for no 
-            action) or the id of a Civilisation that was attacked). 
-    agent: the id of the Civilisation whose reward to calculate
+    state: the current environment state
+    action: the action taken in the state
+    agent: the Civilisation whose reward we want to calculate
     model: a Universe
     """
-    actor = action['actor']
+    assert(len(action_) == 1)
+    actor, actor_action = next(iter(action_.items()))
 
-    if isinstance(action['type'], int):
+    if isinstance(actor_action, civilisation.Civilisation):
         # action was an attack
-        target = action['type']
+        target = actor_action
 
         if target == agent:
             
             # calculate tech levels of actor and target
-            actor_tech_level = growth.tech_level(state=state[actor], model=model)
-            target_tech_level = growth.tech_level(state=state[target], model=model)
+            actor_tech_level = growth.tech_level(state=state[actor.id], 
+                                                 model=model)
+            target_tech_level = growth.tech_level(state=state[target.id], 
+                                                  model=model)
 
             if target_tech_level < actor_tech_level:
                 return model.rewards['destroyed']
@@ -144,13 +129,17 @@ def reward(state, action, agent, model):
         elif actor == agent:
             return model.rewards['attack']
 
-    elif action['type'] == 'hide' and actor == agent:
+    elif actor_action == action.HIDE and actor == agent:
         return model.rewards['hide']
 
     # in all other cases the reward is 0
     return 0
 
-def prob_observation(observation, state, action, agent, model):
+def prob_observation(observation: ipomdp_solver.Observation, 
+                     state: ipomdp_solver.State, 
+                     action: ipomdp_solver.Action, 
+                     agent: civilisation.Civilisation, 
+                     model: universe.Universe) -> float:
     """
     Returns the probability (density) of a given observation by “agent”, given 
     that the system is currently in state “state” and the previous action was 
@@ -160,21 +149,13 @@ def prob_observation(observation, state, action, agent, model):
     observation noise, which is saved in the model's obs_noise_sd attribute.
 
     Keyword arguments:
-    observation: a NumPy array of length n_agents + k or n_agents + k + 1. The ¨
-                 latter corresponds to an observation where an attacker gets 
-                 to know the result of their attack last round (0 or 1). This 
-                 binary value is the last value in the array. A numpy.NaN 
-                 denotes a civilisation that agent cannot observe yet, or the
-                 agent itself.
-    state: a NumPy array of size n_agents x k, where k is the size of an
-            individual agent state representation
-    action: a dictionary, with keys 'actor' (the id of the acting Civilisation) 
-            and 'type' (either a string ('hide' for hiding or '-' for no 
-            action) or the id of a Civilisation that was attacked). 
-    agent: the id of the observing Civilisation
+    observation: the observation received
+    state: the current (assumed) system state
+    action: previous action
+    agent: the observing Civilisation
     model: a Universe. Used for determining distances between civilisations.
     """
-    n_agents = state.shape[0]
+    n_agents = model.n_agents
 
     if model.agent_growth == growth.sigmoid_growth:
         k = 4
@@ -184,14 +165,13 @@ def prob_observation(observation, state, action, agent, model):
     # check that if the agent attacked last round, the observation contains a 
     # bit indicating the success of the attack
     # TODO: later this check can probably be removed
-    if (action['actor'] == agent and
-        isinstance(action['type'], int) and
-        (len(observation) != n_agents + k + 1 or
-         observation[-1] not in (0, 1))):
+    if (agent in action and
+        isinstance(action[agent], civilisation.Civilisation) and
+        (observation[-1] not in (0, 1))):
         raise Exception("Erroneous observation")
 
     # check that the observation of the agent's own state matches the model state
-    if not (observation[n_agents : n_agents + k] == state[agent]).all():
+    if not (observation[n_agents : n_agents + k] == state[agent.id]).all():
         return 0
 
     # calculate tech levels
@@ -201,10 +181,10 @@ def prob_observation(observation, state, action, agent, model):
     # that agent can see
     # TODO: this can be optimised by keeping an array of distances in the
     # model object.
-    nbr_ids = [nbr.unique_id
+    nbr_ids = [nbr.id
                for nbr in model.space.get_neighbors(
-                   pos=model.schedule.agents[agent].pos,
-                   radius=growth.influence_radius(agent_tech_levels[agent]),
+                   pos=agent.pos,
+                   radius=growth.influence_radius(agent_tech_levels[agent.id]),
                    include_center=False)]
 
     # if there are no neighbours, then there is only one possible observation
@@ -214,7 +194,7 @@ def prob_observation(observation, state, action, agent, model):
     # check that agent got observations only from those it can reach
     for ag_id in range(n_agents):
 
-        if ag_id == agent:
+        if ag_id == agent.id:
             continue
 
         is_neighbour = ag_id in nbr_ids
@@ -226,19 +206,23 @@ def prob_observation(observation, state, action, agent, model):
             return 0
 
 
+    # technosignature is a product of visibility factor and tech level
+    nbr_technosignatures = agent_tech_levels[nbr_ids] * state[nbr_ids, 1]
+
     # return density of multivariate normal. Observations from neighbours are
     # independent, centered around their respective technosignatures and
     # have a variance of obs_noise_sd^2
-    # technosignature is a product of visibility factor and tech level
-    # TODO: this can be optimised by not using the SciPy implementation of pdf
-    nbr_technosignatures = agent_tech_levels[nbr_ids] * state[nbr_ids, 1]
-    density = multivariate_normal.pdf(observation[nbr_ids], 
-                                      mean=nbr_technosignatures,
-                                      cov=model.obs_noise_sd**2)
+    density = np.prod(_norm_pdf(x=observation[nbr_ids], 
+                                mean=nbr_technosignatures, 
+                                sd=model.obs_noise_sd))
 
     return density
 
-def sample_observation(state, action, agent, model, n_samples):
+def sample_observation(state: ipomdp_solver.State, 
+                       action: ipomdp_solver.Action,
+                       agent: civilisation.Civilisation, 
+                       model: universe.Universe, 
+                       n_samples: int) -> ipomdp_solver.Observation:
     """
     Returns n_samples of possible observations of “agent” when the system is
     currently in state “state” and the previous action was “action”. 
@@ -253,22 +237,21 @@ def sample_observation(state, action, agent, model, n_samples):
     observation noise, which is saved in the model's obs_noise_sd attribute.
 
     Keyword arguments:
-    state: a NumPy array of size n_agents x k, where k is the size of an
-           individual agent state representation
-    action: a dictionary, with keys 'actor' (the id of the acting Civilisation) 
-            and 'type' (either a string ('hide' for hiding or '-' for no 
-            action) or the id of a Civilisation that was attacked). 
-    agent: the id of the observing Civilisation
+    state: the current model state
+    action: the previous action
+    agent: the observing Civilisation
     model: a Universe. Used for determining distances between civilisations and
            for random sampling.
     n_samples: number of observation samples to generate
 
     Returns:
-    The observations. A NumPy array of size n_samples x (n_agents + k or 
-    n_agents + k + 1). The latter corresponds to an observation 
-    where an attacker gets to know the result of their attack last round 
-    (0 or 1). This binary value is the last value in the array. A numpy.NaN 
-    denotes a civilisation that agent cannot observe yet, or the agent itself.
+    The observations. A NumPy array of size n_samples x (n_agents + k + 1).
+    The n_agents values correspond to technosignatures of civilisations,
+    k corresponds to the agents own state (which it always knows), and the
+    final bit indicates whether a possible attack by the agent was successful. 
+    A numpy.NaN denotes a civilisation that agent cannot observe yet or the 
+    agent itself. The last attack bit it also np.nan if the agent did not 
+    attack.
     If n_samples == 1, the NumPy array is squeezed into a 1d array.
     """
     assert(len(state.shape) == 2)
@@ -279,32 +262,30 @@ def sample_observation(state, action, agent, model, n_samples):
         raise NotImplementedError()
 
     n_agents = model.n_agents
-    # if agent has attacked another last round, we need to include a result
-    # bit in each observation
-    include_success_bit = action['actor'] == agent and isinstance(action['type'], int)
-    obs_length = n_agents + k + include_success_bit
 
     # initialise array
-    sample = np.full(shape=(n_samples, obs_length), fill_value=np.nan)
+    sample = np.full(shape=(n_samples, n_agents + k + 1), fill_value=np.nan)
 
     # add success bit if necessary
-    if include_success_bit:
+    agent_attacked = ((agent in action) and 
+                      (isinstance(action[agent], civilisation.Civilisation)))
+    if agent_attacked:
         # determine if target was destroyed
-        target_id = action['type']
+        target_id = action[agent].id
         target_destroyed = int(state[target_id, 0] == 0)
         sample[:, -1] = target_destroyed
 
     # add agent's own state
-    sample[:, n_agents : n_agents + k] = state[agent]
+    sample[:, n_agents : n_agents + k] = state[agent.id]
 
     # calculate tech levels
     agent_tech_levels = growth.tech_level(state=state, model=model)
 
     # add observations from the civilisations the agent can see
-    nbr_ids = [nbr.unique_id
+    nbr_ids = [nbr.id
                for nbr in model.space.get_neighbors(
-                   pos=model.schedule.agents[agent].pos,
-                   radius=growth.influence_radius(agent_tech_levels[agent]),
+                   pos=agent.pos,
+                   radius=growth.influence_radius(agent_tech_levels[agent.id]),
                    include_center=False)]
 
     if len(nbr_ids) > 0:
@@ -319,8 +300,10 @@ def sample_observation(state, action, agent, model, n_samples):
     return sample
 
 
-def sample_init(n_samples: int, model: universe.Universe, 
-                agent : civilisation.Civilisation = None):
+def sample_init(n_samples: int, 
+                model: universe.Universe, 
+                agent : civilisation.Civilisation = None
+                ) -> ipomdp_solver.Belief:
     """
     Generates n_samples samples of the initial belief. These samples are used
     to represent the initial belief distribution of agents.
@@ -789,7 +772,7 @@ def optimal_action(belief, agent, actor, time_horizon, level, model,
             state = i_state if level == 0 else i_state[0]
 
             # calculate immediate reward
-            action_utility_sum += reward(state=state, action=action, 
+            action_utility_sum += reward(state=state, action_=action, 
                                          agent=agent, model=model)
 
             # propagate environment state
