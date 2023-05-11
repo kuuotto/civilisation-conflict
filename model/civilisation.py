@@ -224,7 +224,7 @@ class Civilisation(mesa.Agent):
         return self._state
 
     def __str__(self):
-        return f'{self.id}'
+        return f'Civ {self.id}'
 
     def __repr__(self):
         return f'Civ {self.id}'

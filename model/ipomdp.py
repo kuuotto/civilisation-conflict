@@ -3,14 +3,14 @@
 # avoids having to give type annotations as strings
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Tuple
 
 if TYPE_CHECKING:
     # avoid circular imports with type hints
     from model import universe, ipomdp_solver
 
 import numpy as np
-from model import growth, action, civilisation
+from model import growth, action, civilisation, ipomdp_solver
 
 def _norm_pdf(x, mean, sd):
     """
@@ -88,6 +88,7 @@ def transition(state: ipomdp_solver.State,
             state[target.id, 1] = 1 # visibility factor
 
     elif actor_action != action.NO_ACTION:
+        print(action_, actor, actor_action)
         raise Exception("Incorrect action format")
 
     return state
@@ -171,8 +172,8 @@ def prob_observation(observation: ipomdp_solver.Observation,
         raise Exception("Erroneous observation")
 
     # check that the observation of the agent's own state matches the model state
-    if not (observation[n_agents : n_agents + k] == state[agent.id]).all():
-        return 0
+    #if not (observation[n_agents : n_agents + k] == state[agent.id]).all():
+    #    return 1 # TODO
 
     # calculate tech levels
     agent_tech_levels = growth.tech_level(state=state, model=model)
@@ -367,7 +368,68 @@ def sample_init(n_samples: int,
     if agent is not None:
         sample[:, agent.id, :] = agent.get_state()
 
+
     return sample
+
+def rollout(state: ipomdp_solver.State, 
+            agent: civilisation.Civilisation,
+            model: universe.Universe,
+            depth: int = 0
+            ) -> Tuple[float, ipomdp_solver.AgentAction]:
+        """
+        Starting from the given model state, use random actions to propagate
+        the state forward until the discount horizon is reached. Returns
+        the value and the first action taken by agent in the rollout process.
+
+        NOTE: state is mutated in place for efficiency.
+
+        Keyword arguments:
+        state: the state to start the rollout in
+        agent: the agent whose reward is of interest
+        model: a Universe.
+        depth: the number of steps we have rolled out so far
+        """
+
+        # if we have reached the discount horizon, stop the recursion
+        if model.discount_factor ** depth < model.discount_epsilon:
+            return 0, action.NO_ACTION
+
+        # choose actor
+        actor = model.rng.choice(model.agents)
+
+        # choose action
+        possible_actions = list(ipomdp_solver.possible_actions(model=model, 
+                                                               agent=agent))
+        actor_action = model.rng.choice(possible_actions)
+        action_ = {actor: actor_action}
+
+        # calculate value of taking action in state
+        value = reward(state=state, action_=action_, agent=agent, model=model)
+        
+        # propagate state
+        next_state = transition(state=state, action_=action_, model=model, 
+                                in_place=True)
+        
+        # continue rollout from the propagated state
+        next_value, _ = rollout(state=next_state, agent=agent, model=model, 
+                                depth=depth+1)
+        
+        agent_action = actor_action if agent == actor else action.NO_ACTION
+        return value + model.discount_factor * next_value, agent_action
+
+def level0_opponent_policy(agent: civilisation.Civilisation,
+                           model: universe.Universe
+                           ) -> ipomdp_solver.AgentAction:
+    """
+    Choose an agent action for agent according to the level 0 default policy.
+    """
+    if model.action_dist_0 == "random":
+        possible_actions = tuple(ipomdp_solver.possible_actions(model=model,
+                                                                agent=agent))
+        return model.rng.choice(possible_actions)
+
+    raise NotImplementedError()
+
 
 def update_beliefs_0(belief, agent_action, agent_observation, agent,
                      model, in_place=False):

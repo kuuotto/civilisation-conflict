@@ -6,11 +6,11 @@ from model import civilisation, growth
 class Universe(mesa.Model):
 
     def __init__(self, n_agents, agent_growth, agent_growth_params, rewards,
-                 n_root_belief_samples, obs_noise_sd, belief_update_time_horizon, 
-                 planning_time_horizon, reasoning_level, action_dist_0, 
-                 discount_factor, exploration_coef, visibility_multiplier, 
+                 n_root_belief_samples, n_tree_simulations, obs_noise_sd, 
+                 reasoning_level, action_dist_0, discount_factor, 
+                 discount_epsilon, exploration_coef, visibility_multiplier, 
                  decision_making, init_age_belief_range, init_age_range, 
-                 init_visibility_belief_range, init_visibility_range, 
+                 init_visibility_belief_range, init_visibility_range,  
                  toroidal_space=False, debug=False, rng_seed=0
                 ) -> None:
         """
@@ -26,12 +26,10 @@ class Universe(mesa.Model):
                  'attack' and the rewards as values
         n_root_belief_samples: the number of samples (particles) used in 
                                representing beliefs at root nodes of trees
+        n_tree_simulations: the number of simulations to perform on each tree
+                            when planning
         obs_noise_sd: standard deviation of technosignature observation noise
                       (which follows an unbiased normal distribution)
-        belief_update_time_horizon: how many steps to look ahead when figuring
-                                    out what others did when updating beliefs
-        planning_time_horizon: how many steps to look ahead when planning our
-                               own action
         reasoning_level: the level of ipomdp reasoning all civilisations use
         action_dist_0: the method agents assume others use to figure out which
                        actions other agents choose. "random" means the others'
@@ -39,6 +37,9 @@ class Universe(mesa.Model):
                        choices.
         discount_factor: how much future time steps are discounted when 
                          determining the rational actions of agents
+        discount_epsilon: how small the value discount_factor ** time has to
+                          be to stop looking forward when planning. Determines
+                          the planning time horizon.
         exploration_coef: used in the MCTS (Monte Carlo Tree Search) based
                           algorithm to adjust how much exploration of seldomly
                           visited agent actions is emphasised
@@ -67,12 +68,12 @@ class Universe(mesa.Model):
         self.agent_growth_params = agent_growth_params
         self.rewards = rewards
         self.n_root_belief_samples = n_root_belief_samples
+        self.n_tree_simulations = n_tree_simulations
         self.obs_noise_sd = obs_noise_sd
-        self.belief_update_time_horizon = belief_update_time_horizon
-        self.planning_time_horizon = planning_time_horizon
         self.reasoning_level = reasoning_level
         self.action_dist_0 = action_dist_0
         self.discount_factor = discount_factor
+        self.discount_epsilon = discount_epsilon
         self.exploration_coef = exploration_coef
         self.visibility_multiplier = visibility_multiplier
         self.decision_making = decision_making
