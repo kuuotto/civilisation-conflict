@@ -48,12 +48,10 @@ class BeliefForest:
     beliefs about the environment and others' beliefs.
     """
 
-    def __init__(self, owner: civilisation.Civilisation, 
-                 agents: List[civilisation.Civilisation]) -> None:
+    def __init__(self, owner: civilisation.Civilisation) -> None:
         """
         Keyword arguments:
         owner - the agent that uses the forest to reason
-        agents - list of agents in the model
         """
         # create dictionary to hold trees
         self.trees = dict()
@@ -113,6 +111,42 @@ class BeliefForest:
                 for _ in range(self.owner.model.n_tree_simulations):
                     tree.expand()
 
+    def update_beliefs(self, 
+                       owner_action: AgentAction, 
+                       owner_observation: Observation) -> None:
+        """
+        Updates the beliefs in all trees after the owner takes the given
+        action.
+
+        Keyword arguments:
+        owner_action: action taken by the owner of the forest
+        owner_observation: observation received by the owner
+        """
+
+        ### 1. update the beliefs in the top-level tree of the owner
+        
+        # set correct node as the new root
+        new_root_node = self.top_level_tree_root_node.children[owner_action]
+        self.top_level_tree_root_node = new_root_node
+        self.top_level_tree_root_node.root_node_weight = 1
+
+        # remove references to previous particles
+        for particle in self.top_level_tree_root_node.particles:
+            particle.previous_particle = None
+
+        # weight new root node particles according to their likelihood under
+        # the given observation
+        self.top_level_tree_root_node.weight_particles(owner_observation)
+
+        # create a root node belief particle set
+        self.top_level_tree_root_node.generate_root_belief()
+
+        ### 2. update the beliefs in the child trees recursively
+
+        for child_tree in self.child_trees(self.top_level_tree,
+                                           include_parent=False):
+            child_tree.update_beliefs()
+
     def get_trees_at_level(self, level: int):
         """
         Returns a generator for all trees at a given level, in arbitrary order.
@@ -128,6 +162,13 @@ class BeliefForest:
         Return the level of the given tree in the forest
         """
         return self.owner.level - len(tree.signature) + 1
+    
+    def get_parent_tree(self, tree: Tree):
+        """
+        Returns the parent of the tree.
+        """
+        parent_signature = tree.signature[:-1]
+        return self.trees[parent_signature]
     
     def child_trees(self, parent_tree: Tree, include_parent: bool = False):
         """
@@ -149,7 +190,8 @@ class BeliefForest:
                 return
 
         else:
-            yield parent_tree
+            if include_parent:
+                yield parent_tree
             yield from (self.trees[parent_signature + (agent,)]
                         for agent in agents 
                         if agent != parent_tree.agent)
@@ -172,9 +214,8 @@ class BeliefForest:
 
         # start from the unique agent action history of the top-level tree
         tree_signature = (self.owner,)
-        tree = self.trees[tree_signature]
-        assert(len(tree.root_nodes) == 1)
-        node = next(iter(tree.root_nodes.values()))
+        tree = self.top_level_tree
+        node = self.top_level_tree_root_node
 
         for next_actor in target_signature[1:]:
 
@@ -196,9 +237,24 @@ class BeliefForest:
             
         return next_actor_action_history
 
+    def optimal_action(self):
+        """
+        Return the optimal action of the owner of the forest.
+        """
+        return self.top_level_tree.tree_policy(
+            node=self.top_level_tree_root_node, explore=False)[0]
+
     @property
-    def top_level_tree(self):
+    def top_level_tree(self) -> Tree:
         return self.trees[(self.owner,)]
+    
+    @property
+    def top_level_tree_root_node(self) -> Node:
+        return next(iter(self.top_level_tree.root_nodes.values()))
+    
+    @top_level_tree_root_node.setter
+    def top_level_tree_root_node(self, new_node: Node):
+        self.top_level_tree.root_nodes = {new_node.agent_action_history: new_node}
 
 
 class Tree:
@@ -293,27 +349,25 @@ class Tree:
 
         # 2. Sample a particle from the root belief
         assert(len(node.belief) > 0)
-        particle = model.rng.choice(node.belief)
+        belief_par = model.rng.choice(node.belief)
 
         # 3. - 6.
 
         # initialise new particle
-        particle = Particle(state=particle.state,
-                            joint_action_history=particle.joint_action_history,
-                            node=node,
-                            weight=1)
+        particle = Particle(state=belief_par.state,
+                            joint_action_history=belief_par.joint_action_history,
+                            node=belief_par.node,
+                            weight=belief_par.weight)
         
         # simulate starting from particle
-        self.simulate_from(particle=particle,
-                           node=node)
+        self.simulate_from(particle=particle, node=node)
         
         # 7. Clear particle weights from self and trees one level below
         # (ignoring root node weights in both cases)
         for tree in self.forest.child_trees(self, include_parent=True):
             for root_node in tree.root_nodes.values():
-                root_node.clear_particle_weights()
+                root_node.clear_child_particle_weights()
             
-
     def simulate_from(self, particle: Particle,
                       node: Node,
                       do_rollout: bool = False):
@@ -452,14 +506,7 @@ class Tree:
                     n_samples=1)
                 
                 # assign weights to particles
-                for par in tree_agent_node.particles:
-                    par.weight = (par.previous_particle.weight * 
-                                    ipomdp.prob_observation(
-                                            observation=tree_agent_obs,
-                                            state=par.state,
-                                            action=par.joint_action_history[-1],
-                                            agent=tree.agent,
-                                            model=model))
+                tree_agent_node.weight_particles(tree_agent_obs)
                 
         ### 5. Repeat
         
@@ -476,6 +523,114 @@ class Tree:
         node.particles.append(particle)
 
         return value
+    
+    def update_beliefs(self):
+        """
+        Update the beliefs of this tree using the parent tree.
+        """
+        model = self.forest.owner.model
+        parent_tree = self.forest.get_parent_tree(self)
+        parent_root_nodes = tuple(parent_tree.root_nodes.values())
+        parent_root_node_weights = tuple(n.root_node_weight 
+                                         for n in parent_root_nodes)
+
+        ### 1. Swap in new root nodes
+        root_nodes = [child_node 
+                      for node in self.root_nodes.values()
+                      for child_node in node.children.values()]
+        
+        # remove references to previous particles
+        for root_node in root_nodes:
+            for particle in root_node.particles:
+                particle.previous_particle = None
+
+        # determine the weight of each node
+        # TODO: clean up
+        for root_node in root_nodes:
+            node_agent_action_history = root_node.agent_action_history
+
+            weight = 0
+
+            for parent_root_node in parent_root_nodes:
+
+                n_matching_particles = 0
+                n_particles = len(parent_root_node.particles)
+
+                # count number of particles in parent root node that have an
+                # agent action history matching the target node in the current
+                # tree
+                for par in parent_root_node.particles:
+
+                    par_agent_action_history = joint_to_agent_action_history(
+                        joint_history = par.joint_action_history,
+                        agent=self.agent)
+                    
+                    if par_agent_action_history == node_agent_action_history:
+                        n_matching_particles += 1
+                    
+                frac_matching_particles = n_matching_particles / n_particles
+
+                weight += (parent_root_node.root_node_weight * 
+                           frac_matching_particles)
+                
+            root_node.root_node_weight = weight
+
+        # add all nodes that have a positive weight
+        self.root_nodes = {node.agent_action_history: node 
+                           for node in root_nodes
+                           if node.root_node_weight > 0}
+
+        ### 2. Create a belief for each new root node
+
+        for root_node in self.root_nodes.values():
+
+            belief = {p: 0 for p in root_node.particles}
+
+            for _ in range(model.n_belief_update_samples):
+                # choose a root node from parent tree
+                parent_root_node = model.rng.choice(parent_root_nodes, 
+                                                    p=parent_root_node_weights)
+                
+                # choose a particle from the chosen parent root node
+                matching_particles = tuple(
+                    p for p in parent_root_node.particles
+                    if (p.agent_action_history(self.agent) == 
+                        root_node.agent_action_history))
+                sum_weights = sum(p.weight for p in matching_particles)
+                weights = tuple(p.weight / sum_weights 
+                                for p in matching_particles)
+
+                particle = model.rng.choice(matching_particles, p=weights)
+
+                # simulate an observation for the current tree agent
+                obs = ipomdp.sample_observation(state=particle.state,
+                                                action=particle.joint_action_history[-1],
+                                                agent=self.agent,
+                                                model=model,
+                                                n_samples=1)
+                
+                # weight particles in current root node
+                root_node.weight_particles(obs)
+
+                # sample particle
+                particle = model.rng.choice(
+                    root_node.particles, 
+                    p=tuple(p.weight for p in root_node.particles))
+                
+                # add to the counts
+                belief[particle] += 1
+
+            # normalise and save beliefs
+            for particle in root_node.particles:
+                particle.weight = belief[particle] / model.n_belief_update_samples
+
+            # generate root belief nodes
+            root_node.generate_root_belief()
+
+        # recurse
+        for child_tree in self.forest.child_trees(parent_tree=self, 
+                                                  include_parent=False):
+            child_tree.update_beliefs()
 
     def tree_policy(self, node: Node, explore: bool) -> AgentAction:
         """
@@ -545,6 +700,9 @@ class Node:
     A node contains a set of particles. In addition, a node at the root of the 
     tree contains a set of belief particles which represent the belief of the
     tree agent about the current state of the world.
+
+    A root node of a tree can also have a root_node_weight attribute, which
+    denotes its likelihood in comparison to other root nodes.
     """
 
     def __init__(self, 
@@ -571,9 +729,11 @@ class Node:
 
         if initial_belief is not None:
             self.belief = [BeliefParticle(state=state, 
-                                          joint_action_history=(), 
+                                          joint_action_history=(),
+                                          weight=1,
                                           node=self) 
                             for state in initial_belief]
+            self.root_node_weight = 1
 
     def __repr__(self) -> str:
         if self.belief is None:
@@ -584,7 +744,7 @@ class Node:
                     f'{len(self.particles)} particles, ' +
                     f'{len(self.belief)} belief particles)')
         
-    def clear_particle_weights(self):
+    def clear_child_particle_weights(self):
         """
         Clears weights of particles from all child nodes of node
         """
@@ -594,7 +754,65 @@ class Node:
                 particle.weight = None
 
             # recurse
-            child_node.clear_particle_weights()
+            child_node.clear_child_particle_weights()
+
+    def weight_particles(self, observation: Observation):
+        """
+        Add weights to each particle in self according to how likely they 
+        are under the given observation
+        """
+        model = self.tree.forest.owner.model
+        agent = self.tree.agent
+
+        weights = {p: ipomdp.prob_observation(observation=observation,
+                                              state=p.state,
+                                              action=p.joint_action_history[-1],
+                                              agent=agent,
+                                              model=model) 
+                   for p in self.particles}
+        
+        # normalise
+        weight_sum = sum(weights.values())
+        if weight_sum > 0:
+            weights = {p: weight / weight_sum for p, weight in weights.items()}
+
+        # save
+        for particle in self.particles:
+            particle.weight = weights[particle]
+
+    def generate_root_belief(self):
+        """
+        Based on the weights of the particles, generate a set of belief
+        particles for this node.
+        """
+        model = self.tree.forest.owner.model
+        assert(hasattr(self, 'root_node_weight'))
+
+        # resample
+        sample = model.rng.choice(self.particles, 
+                                  size=model.n_root_belief_samples,
+                                  p=tuple(p.weight for p in self.particles))
+        
+        # reinvigorate
+        n_new_particles = round(self.root_node_weight * 
+                                model.n_root_belief_samples)
+        reinvig_sample = model.rng.choice(self.particles,
+                                          size=n_new_particles,
+                                          p=tuple(p.weight 
+                                                  for p in self.particles))
+        # TODO: figure a good way to reinvigorate particles, currently nothing
+        # is done to them
+
+        belief_particles = [BeliefParticle(
+                                state=part.state,
+                                joint_action_history=part.joint_action_history,
+                                weight=part.weight,
+                                node=part.node) 
+                            for part in list(sample) + list(reinvig_sample)]
+        
+        # save
+        self.belief = belief_particles
+
 
 class Particle:
     """
@@ -625,6 +843,15 @@ class Particle:
         self.weight = weight # can be None
         self.previous_particle = previous_particle # can be None
 
+    def agent_action_history(self, agent: civilisation.Civilisation
+                             ) -> AgentActionHistory:
+        """
+        Returns the agent action history of the given agent, extracted from the
+        joint action history stored in the particle.
+        """
+        return joint_to_agent_action_history(self.joint_action_history, 
+                                             agent=agent)
+
     def __repr__(self) -> str:
         model = self.node.tree.forest.owner.model
         levels = [round(growth.tech_level(state=agent_state, model=model), 2)
@@ -641,16 +868,23 @@ class BeliefParticle:
     Each particle consists of:
     - a model state
     - a joint action history
+    - a weight
     """
 
-    def __init__(self, state: State, joint_action_history: JointActionHistory,
+    def __init__(self, 
+                 state: State, 
+                 joint_action_history: JointActionHistory,
+                 weight: float,
                  node: Node) -> None:
         self.state = state
         self.joint_action_history = joint_action_history
+        self.weight = weight
         self.node = node
 
     def __repr__(self) -> str:
         model = self.node.tree.forest.owner.model
         levels = [round(growth.tech_level(state=agent_state, model=model), 2)
                   for agent_state in self.state]
-        return (f"BeliefParticle(levels {levels}, {self.joint_action_history})")
+        return (f"BeliefParticle(levels {levels}, " +
+                f"{self.joint_action_history}, " + 
+                f"weight {self.weight})")

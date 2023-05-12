@@ -9,6 +9,7 @@ def create_small_universe(**kwargs):
               'rewards': {'destroyed': -1, 'hide': -0.01, 'attack': 0},
               'n_root_belief_samples': 10,
               'n_tree_simulations': 100,
+              'n_belief_update_samples': 100,
               'obs_noise_sd': 0.05,
               'reasoning_level': 2,
               'action_dist_0': 'random',

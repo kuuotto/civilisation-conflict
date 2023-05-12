@@ -1,6 +1,6 @@
 import mesa
 import numpy as np
-from model import growth, ipomdp, ipomdp_solver
+from model import growth, ipomdp, ipomdp_solver, action
 
 class Civilisation(mesa.Agent):
     """An agent represeting a single civilisation in the universe"""
@@ -45,12 +45,11 @@ class Civilisation(mesa.Agent):
         self._init_state()
         
         # keep track of previous action
-        self.previous_agent_action = None
+        self.previous_agent_action = action.NO_ACTION
 
     def initialise_forest(self):
         """Create belief trees"""
-        self.forest = ipomdp_solver.BeliefForest(owner=self, 
-                                                 agents=self.model.agents)
+        self.forest = ipomdp_solver.BeliefForest(owner=self)
 
     def step_tech_level(self):
         """Update own tech level"""
@@ -71,22 +70,30 @@ class Civilisation(mesa.Agent):
         if self.model.schedule.time == 0:
             return
 
+        if self.model.decision_making != "ipomdp":
+            return
+
         # determine the observation received by agent
         obs = ipomdp.sample_observation(state=self.model.get_state(),
                                         action=self.model.previous_action,
-                                        agent=self.unique_id,
+                                        agent=self,
                                         model=self.model,
                                         n_samples=1)
 
         # update beliefs
-        self.belief = ipomdp.update_beliefs_1(belief=self.belief,
-                                              agent_action=self.previous_agent_action,
-                                              agent_observation=obs,
-                                              agent=self.unique_id,
-                                              model=self.model)
+        self.forest.update_beliefs(owner_action=self.previous_agent_action,
+                                   owner_observation=obs)
 
         # previous action is no longer needed
-        self.previous_agent_action = None
+        self.previous_agent_action = action.NO_ACTION
+
+    def step_plan(self):
+        """
+        Plan if decisions are made using the I-POMDP-based algorithm.
+        """
+        if self.model.decision_making == "ipomdp":
+            self.forest.plan()
+
 
     def step_act(self):
         """
@@ -101,27 +108,23 @@ class Civilisation(mesa.Agent):
         """
         ### Choose an action
         if self.model.decision_making == "ipomdp":
-            action = ipomdp.optimal_action(belief=self.belief,
-                                           agent=self.unique_id,
-                                           actor=self.unique_id,
-                                           time_horizon=self.model.planning_time_horizon,
-                                           level=1,
-                                           model=self.model,
-                                           return_sample=True)[0]['type']
+            agent_action = self.forest.optimal_action()
+
         elif self.model.decision_making == "random":
-            
-            neighbours = self.get_neighbouring_agents()
-            options = ['-', 'hide'] + [nbr.unique_id for nbr in neighbours]
-            action = options[self.rng.choice(len(options))]
+            possible_actions = tuple(ipomdp_solver.possible_actions(
+                model=self.model,
+                agent=self))
+            agent_action = self.rng.choice(possible_actions)
+
         else:
             raise NotImplementedError("Only 'random' and 'ipomdp' are supported")
 
         ### Perform and log action
-        if isinstance(action, int):
-            self.dprint(f"Attacks {action}")
-            self.model.schedule.agents[action].attack(self)
+        if isinstance(agent_action, Civilisation):
+            self.dprint(f"Attacks {agent_action}")
+            agent_action.attack(self)
 
-        elif action == "hide":
+        elif agent_action == action.HIDE:
             self.visibility_factor *= self.model.visibility_multiplier
 
             self.dprint(f"Hides (tech level {self.tech_level:.3f},",
@@ -129,24 +132,23 @@ class Civilisation(mesa.Agent):
             self.model.datacollector.add_table_row('actions',
                 {'time': self.model.schedule.time,
                  'actor': self.unique_id,
-                 'action': 'h'}, 
+                 'action': action.HIDE}, 
                 ignore_missing=True)
                 
-        elif action == "-":
+        elif agent_action == action.NO_ACTION:
             self.dprint("-")
             # log
             self.model.datacollector.add_table_row('actions',
                 {'time': self.model.schedule.time,
                  'actor': self.unique_id,
-                 'action': '-'}, 
+                 'action': action.NO_ACTION}, 
                 ignore_missing=True)
 
         else:
             raise Exception("Unrecognised action")
 
-        self.previous_agent_action = action
-        self.model.previous_action = {'actor': self.unique_id,
-                                      'type': action}
+        self.previous_agent_action = agent_action
+        self.model.previous_action = {self: agent_action}
 
     def attack(self, attacker):
         """

@@ -6,7 +6,8 @@ from model import civilisation, growth
 class Universe(mesa.Model):
 
     def __init__(self, n_agents, agent_growth, agent_growth_params, rewards,
-                 n_root_belief_samples, n_tree_simulations, obs_noise_sd, 
+                 n_root_belief_samples, n_tree_simulations, 
+                 n_belief_update_samples, obs_noise_sd, 
                  reasoning_level, action_dist_0, discount_factor, 
                  discount_epsilon, exploration_coef, visibility_multiplier, 
                  decision_making, init_age_belief_range, init_age_range, 
@@ -28,6 +29,8 @@ class Universe(mesa.Model):
                                representing beliefs at root nodes of trees
         n_tree_simulations: the number of simulations to perform on each tree
                             when planning
+        n_belief_update_samples: number of samples to do when updating beliefs
+                                 of lower level trees
         obs_noise_sd: standard deviation of technosignature observation noise
                       (which follows an unbiased normal distribution)
         reasoning_level: the level of ipomdp reasoning all civilisations use
@@ -69,6 +72,7 @@ class Universe(mesa.Model):
         self.rewards = rewards
         self.n_root_belief_samples = n_root_belief_samples
         self.n_tree_simulations = n_tree_simulations
+        self.n_belief_update_samples = n_belief_update_samples
         self.obs_noise_sd = obs_noise_sd
         self.reasoning_level = reasoning_level
         self.action_dist_0 = action_dist_0
@@ -89,7 +93,8 @@ class Universe(mesa.Model):
         # initialise schedule and space
         self.schedule = SingleActivation(self, 
                                          update_methods=['step_tech_level', 
-                                                         'step_update_beliefs'], 
+                                                         'step_update_beliefs',
+                                                         'step_plan'], 
                                          step_method='step_act')
         self.space = mesa.space.ContinuousSpace(x_max=1, y_max=1, 
                                                 torus=toroidal_space)
