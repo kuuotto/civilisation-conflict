@@ -74,15 +74,21 @@ def transition(state: ipomdp_solver.State,
     elif isinstance(actor_action, civilisation.Civilisation):
         # if there is an attack, see if it is successful or not
         target = actor_action
-        actor_state = state[actor.id, :]
-        target_state = state[target.id, :]
 
-        actor_tech_level = growth.tech_level(state=actor_state, model=model)
-        target_tech_level = growth.tech_level(state=target_state, model=model)
+        # calculate tech levels of actor and target
+        tech_levels = growth.tech_level(state=state, model=model)
 
-        if (actor_tech_level > target_tech_level or
-            (actor_tech_level == target_tech_level and 
-                model.rng.random() > 0.5)):
+        # determine if actor is capable of attacking target
+        actor_influence_radius = growth.influence_radius(tech_levels[actor.id])
+        actor_capable = model.is_neighbour(agent1=actor, 
+                                           agent2=target, 
+                                           radius=actor_influence_radius)
+
+        if ((actor_capable and 
+             tech_levels[actor.id] > tech_levels[target.id]) or
+            (actor_capable and 
+             tech_levels[actor.id] == tech_levels[target.id] and 
+             model.rng.random() > 0.5)):
             # civilisation is destroyed
             state[target.id, 0] = 0 # reset time
             state[target.id, 1] = 1 # visibility factor
@@ -110,30 +116,50 @@ def reward(state: ipomdp_solver.State,
     assert(len(action_) == 1)
     actor, actor_action = next(iter(action_.items()))
 
-    if isinstance(actor_action, civilisation.Civilisation):
-        # action was an attack
-        target = actor_action
-
-        if target == agent:
-            
-            # calculate tech levels of actor and target
-            actor_tech_level = growth.tech_level(state=state[actor.id], 
-                                                 model=model)
-            target_tech_level = growth.tech_level(state=state[target.id], 
-                                                  model=model)
-
-            if target_tech_level < actor_tech_level:
-                return model.rewards['destroyed']
-            elif target_tech_level == actor_tech_level:
-                return model.rewards['destroyed'] / 2
-
-        elif actor == agent:
-            return model.rewards['attack']
-
-    elif actor_action == action.HIDE and actor == agent:
+    # if agent hides, return cost
+    if actor_action == action.HIDE and actor == agent:
         return model.rewards['hide']
 
-    # in all other cases the reward is 0
+    # if someone else hides or the action (by anyone) is no action, reward for
+    # agent is 0
+    if actor_action == action.HIDE or actor_action == action.NO_ACTION:
+        return 0
+
+    # now we know that the action is an attack
+    assert(isinstance(actor_action, civilisation.Civilisation))
+
+    target = actor_action
+
+    # if agent is not the target nor the actor, it is not interested
+    if agent != target and agent != actor:
+        return 0
+
+    # calculate tech levels of actor and target
+    tech_levels = growth.tech_level(state=state, model=model)
+
+    # determine if actor is capable of attacking target
+    actor_influence_radius = growth.influence_radius(tech_levels[actor.id])
+    actor_capable = model.is_neighbour(agent1=actor, 
+                                       agent2=target, 
+                                       radius=actor_influence_radius)
+
+    # if the actor is not capable of attacking, it's as if the attack never
+    # takes place
+    if not actor_capable:
+        return 0
+
+    # if agent attacks, return the cost
+    if actor == agent:
+        return model.rewards['attack']
+
+    # now we know that agent was attacked
+
+    if tech_levels[target.id] < tech_levels[actor.id]:
+        return model.rewards['destroyed']
+    elif tech_levels[target.id] == tech_levels[actor.id]:
+        return model.rewards['destroyed'] / 2
+
+    # the tech level of the actor was higher than ours, we are not destroyed
     return 0
 
 def prob_observation(observation: ipomdp_solver.Observation, 
@@ -152,85 +178,114 @@ def prob_observation(observation: ipomdp_solver.Observation,
     Keyword arguments:
     observation: the observation received
     state: the current (assumed) system state
-    action: previous action
+    action_: previous action
     agent: the observing Civilisation
     model: a Universe. Used for determining distances between civilisations.
     """
-    n_agents = model.n_agents
 
-    if model.agent_growth == growth.sigmoid_growth:
-        k = 4
-    else:
-        raise NotImplementedError()
+    ### 1. determine if the success bits in the observation are correct
 
-    # check that if the agent attacked last round, the observation contains a 
-    # bit indicating the success of the attack
-    # TODO: later this check can probably be removed
-    if (agent in action and
-        isinstance(action[agent], civilisation.Civilisation) and
-        (observation[-1] not in (0, 1))):
-        raise Exception("Erroneous observation")
+    agent_attacked = (agent in action and 
+                      isinstance(action[agent], civilisation.Civilisation))
+    obs_agent_attacked = not np.isnan(observation[-2])
+    
+    # check if agent was actually capable of attacking last round
+    if agent_attacked:
+        target = action[agent]
+        prev_agent_state = state[agent.id].copy()
+        prev_agent_state[0] -= 1
+        prev_agent_tech_level = growth.tech_level(state=prev_agent_state,
+                                                  model=model)
+        prev_agent_influence_radius = growth.influence_radius(
+                                                    prev_agent_tech_level)
+        agent_capable = model.is_neighbour(agent1=agent, agent2=target,
+                                           radius=prev_agent_influence_radius)
+        agent_attacked = agent_attacked and agent_capable
+    
+    # observation should agree with the previous action about attacking
+    if agent_attacked != obs_agent_attacked:
+        return 0
+    
+    # observation should agree with the state about the outcome of the attack
+    if agent_attacked:
+        target_id = action[agent].id
+        attack_successful = state[target_id, 0] == 0
+        obs_attack_successful = observation[-2] == 1
 
-    # check that the observation of the agent's own state matches the model state
-    #if not (observation[n_agents : n_agents + k] == state[agent.id]).all():
-    #    return 1 # TODO
+        if attack_successful != obs_attack_successful:
+            return 0
+
+    agent_targeted = agent in action.values()
+    obs_agent_targeted = not np.isnan(observation[-1])
+
+    # check if actor was actually capable of attacking last round
+    if agent_targeted:
+        actor = next(iter(action.keys()))
+        prev_actor_state = state[actor.id].copy()
+        prev_actor_state[0] -= 1
+        prev_actor_tech_level = growth.tech_level(state=prev_actor_state,
+                                                  model=model)
+        prev_actor_influence_radius = growth.influence_radius(
+                                                    prev_actor_tech_level)
+        actor_capable = model.is_neighbour(agent1=actor, agent2=agent,
+                                           radius=prev_actor_influence_radius)
+        agent_targeted = agent_targeted and actor_capable
+
+    # observation should agree with previous action about being targeted
+    if agent_targeted != obs_agent_targeted:
+        return 0
+    
+    # observation should agree with the state about the outcome of the attack
+    if agent_targeted:
+        attack_successful = state[agent.id, 0] == 0
+        obs_attack_successful = observation[-1] == 1
+
+        if attack_successful != obs_attack_successful:
+            return 0
+
+    ### 2. Calculate the probability from the technosignatures
 
     # calculate tech levels
-    agent_tech_levels = growth.tech_level(state=state, model=model)
+    tech_levels = growth.tech_level(state=state, model=model)
 
-    # make sure that observation only contains observations on civilisations 
-    # that agent can see
-    # TODO: this can be optimised by keeping an array of distances in the
-    # model object.
-    nbr_ids = [nbr.id
-               for nbr in model.space.get_neighbors(
-                   pos=agent.pos,
-                   radius=growth.influence_radius(agent_tech_levels[agent.id]),
-                   include_center=False)]
+    # determine which agents we should have observed in the current state
+    agent_influence_radius = growth.influence_radius(tech_levels[agent.id])
+    observed_agents = tuple(ag.id for ag in model.get_agent_neighbours(
+        agent=agent, radius=agent_influence_radius)) + (agent.id,)
 
-    # if there are no neighbours, then there is only one possible observation
-    if len(nbr_ids) == 0:
-        return 1
+    # find expected observations from all agents (technosignature from 
+    # neighbours, technology level from self)
+    expected_observation = tech_levels * state[:, 1]
+    expected_observation[agent.id] = tech_levels[agent.id]
+    
+    # find individual densities of observations
+    densities = _norm_pdf(x=observation[:model.n_agents],
+                          mean=expected_observation,
+                          sd=model.obs_noise_sd)
 
-    # check that agent got observations only from those it can reach
-    for ag_id in range(n_agents):
-
-        if ag_id == agent.id:
-            continue
-
-        is_neighbour = ag_id in nbr_ids
-
-        if is_neighbour and np.isnan(observation[ag_id]):
-            return 0
-
-        if not is_neighbour and not np.isnan(observation[ag_id]):
-            return 0
-
-
-    # technosignature is a product of visibility factor and tech level
-    nbr_technosignatures = agent_tech_levels[nbr_ids] * state[nbr_ids, 1]
-
-    # return density of multivariate normal. Observations from neighbours are
-    # independent, centered around their respective technosignatures and
-    # have a variance of obs_noise_sd^2
-    density = np.prod(_norm_pdf(x=observation[nbr_ids], 
-                                mean=nbr_technosignatures, 
-                                sd=model.obs_noise_sd))
-
+    # multiply densities of observed agents to get final density
+    # the below is faster than 
+    # densities[observed_agents,].prod()
+    # for small arrays, since indexing with observed_agents
+    # triggers advanced indexing in NumPy
+    density = 1
+    for obs_ag in observed_agents:
+        density *= densities[obs_ag]
+    
     return density
 
 def sample_observation(state: ipomdp_solver.State, 
                        action: ipomdp_solver.Action,
                        agent: civilisation.Civilisation, 
-                       model: universe.Universe, 
-                       n_samples: int) -> ipomdp_solver.Observation:
+                       model: universe.Universe) -> ipomdp_solver.Observation:
     """
-    Returns n_samples of possible observations of “agent” when the system is
+    Returns a single possible observation of “agent” when the system is
     currently in state “state” and the previous action was “action”. 
     Observations include technosignatures from all civilisations (n_agents
-    values, where agent's own value is np.nan), the state of agent in “state”
-    (k values) and, if the agent attacked someone last round, a bit indicating
-    success.
+    values, where agent's own value is its technology level) and two success
+    bits, the first indicating whether the agent successfully attacked someone
+    last round or not and the second indicating whether the agent itself was
+    successfully destroyed last round or not.
 
     Model's random number generator (rng attribute) is used for sampling.
 
@@ -243,63 +298,95 @@ def sample_observation(state: ipomdp_solver.State,
     agent: the observing Civilisation
     model: a Universe. Used for determining distances between civilisations and
            for random sampling.
-    n_samples: number of observation samples to generate
 
     Returns:
-    The observations. A NumPy array of size n_samples x (n_agents + k + 1).
-    The n_agents values correspond to technosignatures of civilisations,
-    k corresponds to the agents own state (which it always knows), and the
-    final bit indicates whether a possible attack by the agent was successful. 
-    A numpy.NaN denotes a civilisation that agent cannot observe yet or the 
-    agent itself. The last attack bit it also np.nan if the agent did not 
-    attack.
-    If n_samples == 1, the NumPy array is squeezed into a 1d array.
+    The observation. A NumPy array of size n_agents + 2.
+    The n_agents values correspond to technosignatures of civilisations and the
+    final two bits are success bits as described above. 
+    The first success bit is np.nan if the agent did not attack.
+    The second success bit is np.nan if the agent was not attacked.
     """
-    assert(len(state.shape) == 2)
-
-    if model.agent_growth == growth.sigmoid_growth:
-        k = 4
-    else:
-        raise NotImplementedError()
-
     n_agents = model.n_agents
 
     # initialise array
-    sample = np.full(shape=(n_samples, n_agents + k + 1), fill_value=np.nan)
+    sample = np.empty(shape=(n_agents + 2,))
 
-    # add success bit if necessary
-    agent_attacked = ((agent in action) and 
-                      (isinstance(action[agent], civilisation.Civilisation)))
+    ### determine success bits
+    agent_attacked = (agent in action and 
+                      isinstance(action[agent], civilisation.Civilisation))
+    
+    # check if agent was actually capable of attacking last round
+    if agent_attacked:
+        target = action[agent]
+        prev_agent_state = state[agent.id].copy()
+        prev_agent_state[0] -= 1
+        prev_agent_tech_level = growth.tech_level(state=prev_agent_state,
+                                                  model=model)
+        prev_agent_influence_radius = growth.influence_radius(
+                                                    prev_agent_tech_level)
+        agent_capable = model.is_neighbour(agent1=agent, agent2=target,
+                                           radius=prev_agent_influence_radius)
+        agent_attacked = agent_attacked and agent_capable
+
+    agent_targeted = agent in action.values()
+
+    # check if actor was actually capable of attacking last round
+    if agent_targeted:
+        actor = next(iter(action.keys()))
+        prev_actor_state = state[actor.id].copy()
+        prev_actor_state[0] -= 1
+        prev_actor_tech_level = growth.tech_level(state=prev_actor_state,
+                                                  model=model)
+        prev_actor_influence_radius = growth.influence_radius(
+                                                    prev_actor_tech_level)
+        actor_capable = model.is_neighbour(agent1=actor, agent2=agent,
+                                           radius=prev_actor_influence_radius)
+        agent_targeted = agent_targeted and actor_capable
+
     if agent_attacked:
         # determine if target was destroyed
         target_id = action[agent].id
         target_destroyed = int(state[target_id, 0] == 0)
-        sample[:, -1] = target_destroyed
+        sample[-2] = target_destroyed
+    else:
+        sample[-2] = np.nan
 
-    # add agent's own state
-    sample[:, n_agents : n_agents + k] = state[agent.id]
+    if agent_targeted:
+        # determine if agent was destroyed
+        agent_destroyed = int(state[agent.id, 0] == 0)
+        sample[-1] = agent_destroyed
+    else:
+        sample[-1] = np.nan
 
     # calculate tech levels
-    agent_tech_levels = growth.tech_level(state=state, model=model)
+    tech_levels = growth.tech_level(state=state, model=model)
+    agent_influence_radius = growth.influence_radius(tech_levels[agent.id])
 
-    # add observations from the civilisations the agent can see
-    nbr_ids = [nbr.id
-               for nbr in model.space.get_neighbors(
-                   pos=agent.pos,
-                   radius=growth.influence_radius(agent_tech_levels[agent.id]),
-                   include_center=False)]
+    # add agent's own tech level (without visibility factor)
+    sample[agent.id] = tech_levels[agent.id]
 
+    # find neighbours
+    nbr_ids = tuple(nbr.id for nbr in model.get_agent_neighbours(
+                                agent=agent, radius=agent_influence_radius))
+    
+    # add technosignatures from neighbours
     if len(nbr_ids) > 0:
-        nbr_technosignatures = agent_tech_levels[nbr_ids] * state[nbr_ids, 1]
-        noise = model.rng.normal(loc=0, scale=model.obs_noise_sd, 
-                                 size=len(nbr_ids))
-        sample[:, nbr_ids] = nbr_technosignatures + noise
+        sample[nbr_ids,] = tech_levels[nbr_ids,] * state[nbr_ids, 1]
 
-    if n_samples == 1:
-        return sample[0]
+    # add noise to technosignatures and own technology level
+    noise = model.rng.normal(loc=0, scale=model.obs_noise_sd,
+                             size=len(nbr_ids) + 1)
+    sample[nbr_ids + (agent.id,),] += noise
+
+    # add uniform noise from non-neighbours
+    for other_agent in model.agents:
+
+        if other_agent == agent or other_agent.id in nbr_ids:
+            continue
+
+        sample[other_agent.id] = model.random.random()
 
     return sample
-
 
 def sample_init(n_samples: int, 
                 model: universe.Universe, 
@@ -368,18 +455,16 @@ def sample_init(n_samples: int,
     if agent is not None:
         sample[:, agent.id, :] = agent.get_state()
 
-
     return sample
 
 def rollout(state: ipomdp_solver.State, 
             agent: civilisation.Civilisation,
             model: universe.Universe,
-            depth: int = 0
-            ) -> Tuple[float, ipomdp_solver.AgentAction]:
+            depth: int = 0) -> float:
         """
         Starting from the given model state, use random actions to propagate
         the state forward until the discount horizon is reached. Returns
-        the value and the first action taken by agent in the rollout process.
+        the value.
 
         NOTE: state is mutated in place for efficiency.
 
@@ -392,30 +477,27 @@ def rollout(state: ipomdp_solver.State,
 
         # if we have reached the discount horizon, stop the recursion
         if model.discount_factor ** depth < model.discount_epsilon:
-            return 0, action.NO_ACTION
+            return 0
 
         # choose actor
-        actor = model.rng.choice(model.agents)
+        actor = model.random.choice(model.agents)
 
-        # choose action
-        possible_actions = list(ipomdp_solver.possible_actions(model=model, 
-                                                               agent=agent))
-        actor_action = model.rng.choice(possible_actions)
-        action_ = {actor: actor_action}
+        # choose action (only ones that actor is capable of)
+        actor_action = model.random.choice(actor.possible_actions(state=state))
+        action = {actor: actor_action}
 
         # calculate value of taking action in state
-        value = reward(state=state, action_=action_, agent=agent, model=model)
+        value = reward(state=state, action_=action, agent=agent, model=model)
         
         # propagate state
-        next_state = transition(state=state, action_=action_, model=model, 
+        next_state = transition(state=state, action_=action, model=model, 
                                 in_place=True)
         
         # continue rollout from the propagated state
-        next_value, _ = rollout(state=next_state, agent=agent, model=model, 
+        next_value = rollout(state=next_state, agent=agent, model=model, 
                                 depth=depth+1)
         
-        agent_action = actor_action if agent == actor else action.NO_ACTION
-        return value + model.discount_factor * next_value, agent_action
+        return value + model.discount_factor * next_value
 
 def level0_opponent_policy(agent: civilisation.Civilisation,
                            model: universe.Universe
@@ -424,8 +506,6 @@ def level0_opponent_policy(agent: civilisation.Civilisation,
     Choose an agent action for agent according to the level 0 default policy.
     """
     if model.action_dist_0 == "random":
-        possible_actions = tuple(ipomdp_solver.possible_actions(model=model,
-                                                                agent=agent))
-        return model.rng.choice(possible_actions)
+        return model.random.choice(agent.possible_actions())
 
     raise NotImplementedError()

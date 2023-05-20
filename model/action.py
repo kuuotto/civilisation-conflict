@@ -1,3 +1,3 @@
-NO_ACTION = "-"
-#NO_TURN = None
-HIDE = "h"
+NO_TURN = -1
+NO_ACTION = 0
+HIDE = 1

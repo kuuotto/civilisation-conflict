@@ -115,7 +115,7 @@ class TestIPOMDP(unittest.TestCase):
                                                  'takeoff_time_range': (10, 20)},
                                               init_age_belief_range=(50, 100),
                                               init_visibility_belief_range=(0, 0.2),
-                                              rng_seed=None)
+                                              seed=None)
         agent = model.agents[0]
 
         # generate belief

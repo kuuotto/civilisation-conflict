@@ -83,8 +83,8 @@ class TestIPOMDPSolver(unittest.TestCase):
             tree = a0.forest.trees[tree_signature]
 
             # check that the tree has a root node
-            self.assertIn((), tree.root_nodes)
-            node = tree.root_nodes[()]
+            self.assertTrue(len(tree.root_nodes) == 1)
+            node = tree.root_nodes[0]
 
             # check the number of particles
             self.assertEqual(len(node.belief), 5)
@@ -104,8 +104,8 @@ class TestIPOMDPSolver(unittest.TestCase):
             tree = a1.forest.trees[tree_signature]
 
             # check that the tree has a root node
-            self.assertIn((), tree.root_nodes)
-            node = tree.root_nodes[()]
+            self.assertTrue(len(tree.root_nodes) == 1)
+            node = tree.root_nodes[0]
 
             # check the number of particles
             self.assertEqual(len(node.belief), 5)
