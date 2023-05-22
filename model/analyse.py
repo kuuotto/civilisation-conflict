@@ -1,7 +1,7 @@
 def count_streaks(data):
     """
     Counts the streaks from time stamps.
-    data should be a pandas Series which contains the 
+    data should be a pandas Series which contains the
     time stamps of the events of interest.
     """
     if len(data) == 0:
@@ -15,7 +15,7 @@ def count_streaks(data):
             # streak continues
             streak += 1
         else:
-            #streak broken
+            # streak broken
             if streak not in streaks.keys():
                 streaks[streak] = 1
             else:

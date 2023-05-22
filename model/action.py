@@ -1,0 +1,3 @@
+NO_TURN = -1
+NO_ACTION = 0
+HIDE = 1
