@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def influence_radius(tech_level):
     """
     Gives the radius of influence as a function of the technology level
@@ -7,13 +8,15 @@ def influence_radius(tech_level):
 
     TODO: define more rigorously
     """
-    return 0.1*np.tan(tech_level * (np.pi / 2))
+    return 0.1 * np.tan(tech_level * (np.pi / 2))
+
 
 def inv_influence_radius(inf_radius):
     """
     Gives the tech level corresponding to a given influence radius
     """
-    return (2/np.pi) * np.arctan(10*inf_radius)
+    return (2 / np.pi) * np.arctan(10 * inf_radius)
+
 
 def sigmoid_growth(time, speed, takeoff_time):
     """
@@ -24,15 +27,16 @@ def sigmoid_growth(time, speed, takeoff_time):
     Arguments can be individual numbers of NumPy arrays of equal length.
     """
     exponent = -speed * (time - takeoff_time)
-    return 1/(1+np.exp(exponent))
+    return 1 / (1 + np.exp(exponent))
+
 
 def tech_level(state, model):
     """
-    Calculate the tech level(s) of the agent(s) in state. 
-    
+    Calculate the tech level(s) of the agent(s) in state.
+
     State can be an individual agent state (in which case a single tech level
-    is returned), a model state (in which case n_agents tech levels are 
-    returned) or a higher-dimensional collection of model states. 
+    is returned), a model state (in which case n_agents tech levels are
+    returned) or a higher-dimensional collection of model states.
 
     Keyword arguments:
     state - a NumPy array where the last dimension corresponds to an individual
@@ -41,8 +45,8 @@ def tech_level(state, model):
             its agent_growth attribute
     """
     if model.agent_growth == sigmoid_growth:
-        return sigmoid_growth(time=state[..., 0],
-                              speed=state[..., 2],
-                              takeoff_time=state[..., 3])
+        return sigmoid_growth(
+            time=state[..., 0], speed=state[..., 2], takeoff_time=state[..., 3]
+        )
     else:
         raise NotImplementedError()

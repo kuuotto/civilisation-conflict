@@ -4,17 +4,34 @@ import numpy as np
 from model import civilisation, growth
 from typing import Tuple
 
-class Universe(mesa.Model):
 
-    def __init__(self, n_agents, agent_growth, agent_growth_params, rewards,
-                 n_root_belief_samples, n_tree_simulations, 
-                 n_belief_update_samples, n_reinvigoration_particles,
-                 obs_noise_sd, reasoning_level, action_dist_0, discount_factor, 
-                 discount_epsilon, exploration_coef, visibility_multiplier, 
-                 decision_making, init_age_belief_range, init_age_range, 
-                 init_visibility_belief_range, init_visibility_range,  
-                 toroidal_space=False, debug=False, seed=0
-                ) -> None:
+class Universe(mesa.Model):
+    def __init__(
+        self,
+        n_agents,
+        agent_growth,
+        agent_growth_params,
+        rewards,
+        n_root_belief_samples,
+        n_tree_simulations,
+        n_belief_update_samples,
+        n_reinvigoration_particles,
+        obs_noise_sd,
+        reasoning_level,
+        action_dist_0,
+        discount_factor,
+        discount_epsilon,
+        exploration_coef,
+        visibility_multiplier,
+        decision_making,
+        init_age_belief_range,
+        init_age_range,
+        init_visibility_belief_range,
+        init_visibility_range,
+        toroidal_space=False,
+        debug=False,
+        seed=0,
+    ) -> None:
         """
         Initialise a new Universe model.
 
@@ -90,18 +107,17 @@ class Universe(mesa.Model):
         self.init_visibility_belief_range = init_visibility_belief_range
         self.init_visibility_range = init_visibility_range
         self.debug = debug
-        
+
         # initialise random number generator
         self.rng = np.random.default_rng(seed)
 
         # initialise schedule and space
-        self.schedule = SingleActivation(self, 
-                                         update_methods=['step_tech_level', 
-                                                         'step_update_beliefs',
-                                                         'step_plan'], 
-                                         step_method='step_act')
-        self.space = mesa.space.ContinuousSpace(x_max=1, y_max=1, 
-                                                torus=toroidal_space)
+        self.schedule = SingleActivation(
+            self,
+            update_methods=["step_tech_level", "step_update_beliefs", "step_plan"],
+            step_method="step_act",
+        )
+        self.space = mesa.space.ContinuousSpace(x_max=1, y_max=1, torus=toroidal_space)
 
         # keep a list of agents in the model. The schedule also keeps a list,
         # but it is re-generated every time it is accessed which is not very
@@ -110,7 +126,6 @@ class Universe(mesa.Model):
 
         # add agents
         for id in range(n_agents):
-
             # choose the age of the civilisation
             age = self.rng.integers(*init_age_range, endpoint=True)
 
@@ -118,24 +133,31 @@ class Universe(mesa.Model):
             visibility_factor = self.rng.uniform(*init_visibility_range)
 
             # choose the growth parameters of the civilisation
-            if (agent_growth == growth.sigmoid_growth and
-                "speed_range" in agent_growth_params and
-                "takeoff_time_range" in agent_growth_params):
-
+            if (
+                agent_growth == growth.sigmoid_growth
+                and "speed_range" in agent_growth_params
+                and "takeoff_time_range" in agent_growth_params
+            ):
                 speed_range = agent_growth_params["speed_range"]
                 takeoff_time_range = agent_growth_params["takeoff_time_range"]
 
                 growth_params = {
-                    'speed': self.rng.uniform(*speed_range),
-                    'takeoff_time': self.rng.integers(*takeoff_time_range,
-                                                      endpoint=True)}
+                    "speed": self.rng.uniform(*speed_range),
+                    "takeoff_time": self.rng.integers(
+                        *takeoff_time_range, endpoint=True
+                    ),
+                }
             else:
                 growth_params = agent_growth_params
 
-            agent = civilisation.Civilisation(unique_id=id, model=self, 
-                                              reasoning_level=reasoning_level, age=age, 
-                                              visibility_factor=visibility_factor,
-                                              agent_growth_params=growth_params)
+            agent = civilisation.Civilisation(
+                unique_id=id,
+                model=self,
+                reasoning_level=reasoning_level,
+                age=age,
+                visibility_factor=visibility_factor,
+                agent_growth_params=growth_params,
+            )
             self.schedule.add(agent)
             self.agents.append(agent)
 
@@ -152,13 +174,21 @@ class Universe(mesa.Model):
         # initialise data collection
         self.datacollector = mesa.DataCollector(
             agent_reporters={
-                "Technology": "tech_level", 
+                "Technology": "tech_level",
                 "Radius of Influence": "influence_radius",
                 "Visibility Factor": "visibility_factor",
-                "Position": "pos"
-            }, 
-            tables={'actions': ['time', 'actor', 'action', 'attack_target', 
-                                'attack_successful']})
+                "Position": "pos",
+            },
+            tables={
+                "actions": [
+                    "time",
+                    "actor",
+                    "action",
+                    "attack_target",
+                    "attack_successful",
+                ]
+            },
+        )
 
         # initialise model state
         self._init_state()
@@ -193,7 +223,7 @@ class Universe(mesa.Model):
             self._state[i] = agent.get_state()
 
         return self._state
-    
+
     def _init_distance_cache(self) -> None:
         """
         Calculates distances between all agents and stores these. This is used
@@ -207,7 +237,6 @@ class Universe(mesa.Model):
 
         for i, ag_i in enumerate(self.agents):
             for j, ag_j in enumerate(self.agents):
-                
                 if ag_j == ag_i:
                     continue
 
@@ -215,11 +244,9 @@ class Universe(mesa.Model):
                 self._distances[i, j] = distance
                 self._distances[j, i] = distance
 
-
-    def get_agent_neighbours(self, 
-                             agent: civilisation.Civilisation,
-                             radius: float
-                             ) -> Tuple[civilisation.Civilisation]:
+    def get_agent_neighbours(
+        self, agent: civilisation.Civilisation, radius: float
+    ) -> Tuple[civilisation.Civilisation]:
         """
         Find neighbours of agent given a radius.
 
@@ -227,17 +254,23 @@ class Universe(mesa.Model):
         because this uses the pre-generated array of agent distances. We can
         do this because agents do not move in our model.
         """
-        return tuple(ag for ag in self.agents 
-                     if self._distances[agent.id, ag.id] < radius 
-                     and ag != agent)
-    
-    def is_neighbour(self, agent1: civilisation.Civilisation,
-                     agent2: civilisation.Civilisation,
-                     radius: float) -> bool:
+        return tuple(
+            ag
+            for ag in self.agents
+            if self._distances[agent.id, ag.id] < radius and ag != agent
+        )
+
+    def is_neighbour(
+        self,
+        agent1: civilisation.Civilisation,
+        agent2: civilisation.Civilisation,
+        radius: float,
+    ) -> bool:
         """
         Checks if distance between the agents is less than radius.
         """
         return self._distances[agent1.id, agent2.id] < radius
+
 
 class SingleActivation(mesa.time.BaseScheduler):
     """
@@ -247,8 +280,9 @@ class SingleActivation(mesa.time.BaseScheduler):
     a random agent is activated to perform a step method.
     """
 
-    def __init__(self, model: mesa.Model, update_methods: list[str],
-                 step_method: str) -> None:
+    def __init__(
+        self, model: mesa.Model, update_methods: list[str], step_method: str
+    ) -> None:
         """
         Create an empty Single Activation schedule.
 
@@ -256,7 +290,7 @@ class SingleActivation(mesa.time.BaseScheduler):
             model: Model object associated with the schedule.
             update_methods: List of strings of names of stages to run, in the
                             order to run them in.
-            step_method: The name of the step method to be activated in a 
+            step_method: The name of the step method to be activated in a
                          single randomly chosen agent.
         """
         super().__init__(model)
