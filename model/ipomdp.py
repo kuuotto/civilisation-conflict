@@ -534,5 +534,11 @@ def level0_opponent_policy(
     """
     if model.action_dist_0 == "random":
         return model.random.choice(agent.possible_actions())
+    elif model.action_dist_0 == "passive":
+        return action.NO_ACTION
+    elif model.action_dist_0 == "aggressive":
+        possible_targets = [*model.agents]
+        possible_targets.remove(agent)
+        return model.random.choice(possible_targets)
 
     raise NotImplementedError()
