@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Tuple, List, Union, Dict, Generator, Iterable
 from numpy.typing import NDArray
 from model import ipomdp, growth, action
 import numpy as np
+import math
 
 if TYPE_CHECKING:
     # avoid circular imports with type hints
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
     AgentActionHistory = Tuple[AgentAction, ...]
     TreeSignature = Tuple[civilisation.Civilisation, ...]
     State = NDArray
-    Observation = NDArray
+    Observation = Tuple
     Belief = NDArray
 
 
@@ -40,53 +41,15 @@ def joint_to_agent_action_history(
     )
 
 
-# def sample_joint_action_histories(agent_action_history: AgentActionHistory,
-#                                   agent: civilisation.Civilisation,
-#                                   model: universe.Universe,
-#                                   n_samples: int
-#                                   ) -> Generator[JointActionHistory, None, None]:
-#     """
-#     Return samples of joint action histories where the given agent's actions
-#     are unchanged but others' actions are decided based on the level 0
-#     default policy.
-
-#     Keyword arguments:
-#     agent_action_history: agent action history to base the samples on
-#     agent: the agent whose actions to keep intact in the joint action histories
-#     model: a Universe
-#     n_samples: number of samples to generate
-#     """
-#     for _ in range(n_samples):
-
-#         sample = []
-
-#         for agent_action in agent_action_history:
-
-#             # don't change the joint action if agent acted
-#             if agent_action != action.NO_TURN:
-#                 sample.append({agent: agent_action})
-#                 continue
-
-#             # choose actor
-#             actor = model.rng.choice(model.agents)
-
-#             # choose action
-#             actor_action = ipomdp.level0_opponent_policy(agent=actor,
-#                                                          model=model)
-
-#             sample.append({actor: actor_action})
-
-#         yield tuple(sample)
-
-
 def weight_particles(
     particles: Tuple[Particle, ...],
     observation: Observation,
     agent: civilisation.Civilisation,
     model: universe.Universe,
-):
+    prior_weights: Tuple[float] = None,
+) -> Tuple[float, ...]:
     """
-    Add weights to each particle according to how likely they are under the
+    Return weights to each particle according to how likely they are under the
     given observation.
 
     Keyword arguments:
@@ -94,30 +57,57 @@ def weight_particles(
     observation: the observation to use for weighting the particles
     agent: the observer
     model: a Universe
+    prior_weights: can be supplied to give particles prior weights instead of accessing
+                   them through particle.previous_particle.weight
     """
+    if len(particles) == 0:
+        return ()
+
+    # calculate tech levels in all particles at once to increase performance
+    all_states = np.stack(tuple(p.state for p in particles), axis=0)
+    tech_levels = growth.tech_level(state=all_states, model=model)
+
+    # calculate influence radii of agent in different states
+    agent_influence_radii = growth.influence_radius(tech_levels[:, agent.id])
+
+    # calculate influence radii in previous state
+    all_states[:, :, 0] -= 1
+    prev_tech_levels = growth.tech_level(state=all_states, model=model)
+    prev_influence_radii = growth.influence_radius(prev_tech_levels)
+
+    # find prior weights
+    if prior_weights is None:
+        prior_weights = (p.previous_particle.weight for p in particles)
+
     # calculate weights
     weights = tuple(
-        p.previous_particle.weight
+        prior_weight
         * ipomdp.prob_observation(
             observation=observation,
             state=p.state,
             action=p.joint_action_history[-1],
             agent=agent,
             model=model,
+            tech_levels=tech_lvls,
+            agent_influence_radius=agent_influence_radius,
+            prev_influence_radii=prev_influence_rad,
         )
-        for p in particles
+        for p, prior_weight, tech_lvls, agent_influence_radius, prev_influence_rad in zip(
+            particles,
+            prior_weights,
+            tech_levels,
+            agent_influence_radii,
+            prev_influence_radii,
+            strict=True,
+        )
     )
 
     # normalise
     weight_sum = sum(weights)
     if weight_sum > 0:
         weights = tuple(weight / weight_sum for weight in weights)
-    # else:
-    #     print("When weighting particles, all got weight 0")
 
-    # save
-    for particle, weight in zip(particles, weights):
-        particle.weight = weight
+    return weights
 
 
 class BeliefForest:
@@ -135,15 +125,15 @@ class BeliefForest:
         self.trees = dict()
         self.owner = owner
 
-        # create agent's own tree at the highest level
-        self.trees[(owner,)] = Tree(signature=(owner,), forest=self)
-
         # create trees for agents at lower levels
         self.create_child_trees(
             parent_tree_level=owner.level,
             parent_tree_agent=owner,
             parent_tree_signature=(owner,),
         )
+
+        # create agent's own tree at the highest level
+        self.trees[(owner,)] = Tree(signature=(owner,), forest=self)
 
     def create_child_trees(
         self,
@@ -153,7 +143,7 @@ class BeliefForest:
     ) -> None:
         """
         Create trees for the opponents of agent who is at the given level.
-        Works recursively.
+        Works recursively. Lowest level trees are created first.
         """
         model = parent_tree_agent.model
 
@@ -164,17 +154,19 @@ class BeliefForest:
         tree_level = parent_tree_level - 1
 
         for other_agent in other_agents:
-            # create tree
+            # signature of the new tree
             tree_signature = parent_tree_signature + (other_agent,)
-            self.trees[tree_signature] = Tree(signature=tree_signature, forest=self)
 
-            # create child trees for this tree if applicable
+            # first create child trees for this tree if applicable
             if tree_level > 0:
                 self.create_child_trees(
                     parent_tree_level=tree_level,
                     parent_tree_agent=other_agent,
                     parent_tree_signature=tree_signature,
                 )
+
+            # create the tree at this level
+            self.trees[tree_signature] = Tree(signature=tree_signature, forest=self)
 
     def plan(self):
         """
@@ -189,6 +181,12 @@ class BeliefForest:
 
             # expand trees
             for tree in trees:
+                print(f"Planning in {tree.signature}")
+
+                # n_simulations = self.owner.model.n_tree_simulations * (
+                #     self.owner.level - level + 1
+                # )
+
                 for _ in range(self.owner.model.n_tree_simulations):
                     tree.expand()
 
@@ -210,37 +208,28 @@ class BeliefForest:
         old_root_node = self.top_level_tree_root_node
         new_root_node = old_root_node.child_nodes[owner_action]
         self.top_level_tree_root_node = new_root_node
-        new_root_node.root_node_weight = 1
 
-        # create reinvigoration particles
-        reinvig_particles = new_root_node.generate_reinvigorated_particles()
-
-        # weight current particles and created particles together
-        weight_particles(
-            new_root_node.particles + reinvig_particles,
-            observation=owner_observation,
-            agent=self.owner,
-            model=self.owner.model,
-        )
-
-        # create a root node belief particle set
-        new_root_node.generate_root_belief(
-            particles=new_root_node.particles + reinvig_particles
-        )
+        # weight particles in the top-level tree root node
+        new_root_node.weight_particles(owner_observation)
 
         # check that the weights do not sum to 0
-        if sum(p.weight for p in self.top_level_tree_root_node.belief) == 0:
+        if sum(p.weight for p in self.top_level_tree_root_node.particles) == 0:
             print(
                 "The weights of the particles in the top-level tree root node are all 0"
             )
+
+        ### 2. Update belief over interactive states over lower-level models
+        new_root_node.update_lower_beliefs()
 
         # remove references to previous particles
         for particle in new_root_node.particles:
             particle.previous_particle = None
 
+        # remove reference to previous node
+        new_root_node.parent_node = None
+
         print(
-            f"{self.top_level_tree.signature}:",
-            f"({new_root_node.agent_action_history}, {new_root_node.root_node_weight:.3f})",
+            f"{self.top_level_tree.signature}: ({new_root_node.agent_action_history})",
         )
 
         ### 2. update the beliefs in the child trees recursively
@@ -274,7 +263,9 @@ class BeliefForest:
         parent_signature = tree.signature[:-1]
         return self.trees[parent_signature]
 
-    def child_trees(self, parent_tree: Tree, include_parent: bool = False):
+    def child_trees(
+        self, parent_tree: Tree, include_parent: bool = False
+    ) -> Generator[Tree, None, None]:
         """
         Generates all the child trees (trees at exactly one level lower) of the
         given tree.
@@ -286,20 +277,39 @@ class BeliefForest:
         parent_signature = parent_tree.signature
         agents = self.owner.model.agents
 
-        if parent_tree.level == 0:
-            if include_parent:
-                yield parent_tree
-            else:
-                return
+        if include_parent:
+            yield parent_tree
 
-        else:
-            if include_parent:
-                yield parent_tree
-            yield from (
-                self.trees[parent_signature + (agent,)]
-                for agent in agents
-                if agent != parent_tree.agent
-            )
+        if parent_tree.level == 0:
+            return
+
+        yield from (
+            self.trees[parent_signature + (agent,)]
+            for agent in agents
+            if agent != parent_tree.agent
+        )
+
+    def get_matching_lower_node(
+        self, particle: Particle, agent: civilisation.Civilisation
+    ) -> Node:
+        """
+        Given a particle, use the joint action history stored in it to find the
+        matching node in the tree of the given agent at the level below.
+        """
+        tree = particle.node.tree
+        assert tree.level > 0
+
+        # find agent action history based on joint action history stored in particle
+        agent_action_history = particle.agent_action_history(agent)
+
+        # find child tree
+        child_tree_signature = tree.signature + (agent,)
+        child_tree = self.trees[child_tree_signature]
+
+        # find node in child tree
+        node = child_tree.get_node(agent_action_history)
+
+        return node
 
     def optimal_action(self):
         """
@@ -326,8 +336,8 @@ class Tree:
     """
     Tree corresponds to a single agent. The tree is the child of another tree
     that corresponds to an agent at the level above (unless it is the top-level
-    tree). The tree can contain several subtrees, the root of which each
-    correspond to a possible agent history for the tree agent.
+    tree). The tree is actually a collection of multiple trees. The root nodes of
+    each of these correspond to a possible agent history for the tree agent.
     """
 
     def __init__(self, signature: TreeSignature, forest: BeliefForest) -> None:
@@ -345,25 +355,16 @@ class Tree:
         self.forest = forest
         self.signature = signature
         self.level = forest.get_tree_level(self)
-        model = self.agent.model
-
-        # check whether tree is the top-level tree in the forest
-        top_level = len(signature) == 1
 
         # create root node corresponding to empty agent action history
-        init_belief = ipomdp.sample_init(
-            n_samples=model.n_root_belief_samples,
-            model=model,
-            agent=self.agent if top_level else None,
+        root_node = Node(
+            tree=self,
+            agent_action_history=(),
+            parent_node=None,
         )
-        self.root_nodes = [
-            Node(
-                tree=self,
-                agent_action_history=(),
-                initial_belief=init_belief,
-                parent_node=None,
-            )
-        ]
+        root_node.create_initial_particles()
+
+        self.root_nodes = [root_node]
 
     def get_node(self, agent_action_history: AgentActionHistory) -> Node:
         """
@@ -394,8 +395,9 @@ class Tree:
     def expand(self):
         """
         Expand the current tree by
-        1. Randomly choosing particles top-down to determine which subtree to
-           expand
+        1. Randomly choosing particles top-down to determine which root node to start
+           expanding from. This is also how we find weights for the particles in the
+           chosen root node.
         2. Sampling a belief particle from the root belief of the chosen subtree
         3. Using a version of MCTS to traverse the tree, at each step randomly
            selecting who gets to act and choosing others' actions by simulating
@@ -406,32 +408,55 @@ class Tree:
            rollout until the discounting horizon is reached
         6. Propagating this value up the tree to all the new particles created
            (dicounting appropriately)
-        7. Removing the created temporary weights from the particles
+        (7. Removing the created temporary weights from the particles)
         """
         model = self.forest.owner.model
 
         # 1. Choose the root node to start sampling from
-        if len(self.root_nodes) > 1:
-            root_node_weights = tuple(n.root_node_weight for n in self.root_nodes)
-            node = model.random.choices(self.root_nodes, weights=root_node_weights)[0]
-        else:
-            node = self.root_nodes[0]
 
-        # 2. Sample a particle from the root belief
-        belief_par = model.random.choices(
-            node.belief, weights=tuple(p.weight for p in node.belief)
-        )[0]
+        node = self.forest.top_level_tree_root_node
+        particle_weights = tuple(p.weight for p in node.particles)
 
-        # initialise new particle
-        particle = Particle(
-            state=belief_par.state,
-            joint_action_history=belief_par.joint_action_history,
-            node=belief_par.node,
-            weight=belief_par.weight,
-        )
+        for next_agent in self.signature[1:]:
+            # choose random particle given weights
+            particle = model.random.choices(node.particles, weights=particle_weights)[0]
+
+            # find matching node
+            node = self.forest.get_matching_lower_node(
+                particle=particle, agent=next_agent
+            )
+
+            # get weights for node based on the particle
+            particle_weights = particle.lower_particle_dist[next_agent]
+
+        assert node in self.root_nodes
+
+        # save weights to particles
+        for particle, weight in zip(node.particles, particle_weights):
+            particle.weight = weight
+
+        # 2. Sample a particle to start simulating from
+        start_particle = model.random.choices(node.particles, weights=particle_weights)[
+            0
+        ]
+
+        # save weight to particles in lower-level trees
+        if self.level > 0:
+            other_agents = (ag for ag in model.agents if ag != self.agent)
+            for other_agent in other_agents:
+                # find matching node
+                lower_node = self.forest.get_matching_lower_node(
+                    particle=start_particle, agent=other_agent
+                )
+
+                lower_particle_weights = start_particle.lower_particle_dist[other_agent]
+                for particle, weight in zip(
+                    lower_node.particles, lower_particle_weights
+                ):
+                    particle.weight = weight
 
         # 3. - 6. simulate starting from particle
-        self.simulate_from(particle=particle)
+        self.simulate_from(particle=start_particle)
 
         # 7. Clear particle weights from self and trees one level below
         # (ignoring root node weights in both cases)
@@ -448,10 +473,11 @@ class Tree:
         2. choosing the actor's action
         3. propagating the particle with this action using the transition
            function of the I-POMDP
-        4. generating an observation for the tree agent and for each tree agent
-           on the level below and weighing each current particle to generate
-           a new belief
-        5. repeat
+        4. generating an observation for the tree agent and creating a new belief in the
+           next node
+        5. generating an observation for each other agent and updating the beliefs in
+           the trees on the level below
+        6. repeat
         """
         model = self.forest.owner.model
         node = particle.node
@@ -471,14 +497,6 @@ class Tree:
             return value
 
         ### 1. choose actor
-        # the weights are used to make sampling of the child nodes in this
-        # tree more equal
-        # n_actions = len(tuple(possible_actions(model=model, agent=self.agent)))
-        # agent_weights = tuple(n_actions / (n_actions + 1)
-        #                       if ag == self.agent
-        #                       else 1/((len(model.agents)-1)*(n_actions + 1))
-        #                       for ag in model.agents)
-        # actor = model.rng.choice(model.agents, p=agent_weights)
         actor = model.random.choice(model.agents)
 
         ### 2. choose an action
@@ -494,49 +512,47 @@ class Tree:
 
         else:
             # use the tree below to choose the action
-            child_tree = self.forest.trees[self.signature + (actor,)]
-
-            # find correct node in the child tree
             try:
-                child_tree_node = child_tree.get_node(
-                    particle.agent_action_history(actor)
+                lower_node = self.forest.get_matching_lower_node(
+                    particle=particle, agent=actor
                 )
+
             except Exception:
                 # if the tree below doesn't have a node corresponding to the
                 # agent action history, we have no choice but to choose
                 # according to the level 0 default policy
-                # print("Other agent acted but had not planned for this")
+                print("Other agent acted but had not planned for this", depth)
                 actor_action = ipomdp.level0_opponent_policy(agent=actor, model=model)
             else:
                 # determine action
-                actor_action, _ = child_tree.tree_policy(
-                    node=child_tree_node, explore=False, softargmax=True
+                actor_action, _ = lower_node.tree.tree_policy(
+                    node=lower_node, explore=False, softargmax=True
                 )
 
-        # if we don't act and ended up in an unvisited node, do a rollout
-        if actor != self.agent:
-            # check if we have visited NO_TURN before under this belief
-            n_visitations = sum(
-                n.weight > 0
-                for n in node.particles
-                if n.next_agent_action == action.NO_TURN
-            )
+        # # if we don't act and ended up in an unvisited node, do a rollout
+        # if actor != self.agent:
+        #     # check if we have visited NO_TURN before under this belief
+        #     n_visitations = sum(
+        #         n.weight > 0
+        #         for n in node.particles
+        #         if n.next_agent_action == action.NO_TURN
+        #     )
 
-            if n_visitations == 0:
-                action_unvisited = True
+        #     if n_visitations == 0:
+        #         action_unvisited = True
 
         # package action
         action_ = {actor: actor_action}
         agent_action = actor_action if self.agent == actor else action.NO_TURN
 
-        ### 3. Propagate state
-        propagated_state = ipomdp.transition(
-            state=particle.state, action_=action_, model=model
-        )
-
         # calculate value of taking action
         agent_action_value = ipomdp.reward(
             state=particle.state, action_=action_, agent=self.agent, model=model
+        )
+
+        ### 3. Propagate state
+        propagated_state = ipomdp.transition(
+            state=particle.state, action_=action_, model=model
         )
 
         # create a new node if necessary
@@ -560,15 +576,28 @@ class Tree:
             previous_particle=particle,
         )
 
-        ### 4. Generate observations for the tree agent and all the other
-        ### agents one level below and weight particles in the next nodes
-
+        ### 4. Generate an observation for the tree agent and update belief
+        # if the action is unvisited, the newly created particle will never be saved
+        # and creating weights is not necessary
         if not action_unvisited:
-            for tree in self.forest.child_trees(parent_tree=self, include_parent=True):
-                # find correct node
+            agent_obs = ipomdp.sample_observation(
+                state=propagated_state,
+                action=action_,
+                agent=self.agent,
+                model=model,
+            )
+
+            next_node.weight_particles(agent_obs)
+
+        ### 5. Generate observations for other agents and update beliefs about
+        ### interactive states at the level below
+        if not action_unvisited and self.level > 0:
+            other_agents = (ag for ag in model.agents if ag != self.agent)
+
+            for other_agent in other_agents:
                 try:
-                    tree_agent_node = tree.get_node(
-                        new_particle.agent_action_history(tree.agent)
+                    lower_node = self.forest.get_matching_lower_node(
+                        particle=new_particle, agent=other_agent
                     )
                 except Exception:
                     # there is no node, so we cannot create beliefs
@@ -576,15 +605,15 @@ class Tree:
                     continue
 
                 # generate observation
-                tree_agent_obs = ipomdp.sample_observation(
+                other_agent_obs = ipomdp.sample_observation(
                     state=propagated_state,
                     action=action_,
-                    agent=tree.agent,
+                    agent=other_agent,
                     model=model,
                 )
 
                 # assign weights to particles
-                tree_agent_node.weight_particles(tree_agent_obs)
+                lower_node.weight_particles(other_agent_obs)
 
         ### 5. Repeat
 
@@ -594,11 +623,13 @@ class Tree:
 
         # save value and next agent action to particle
         value = agent_action_value + model.discount_factor * future_value
-        particle.value = value
-        particle.next_agent_action = agent_action
+        if agent_action != action.NO_TURN:
+            particle.add_expansion(agent_action=agent_action, value=value)
 
         # add particle to node
-        node.particles.append(particle)
+        # (except if this is the particle where we started simulating)
+        if depth > 0:
+            node.particles.append(particle)
 
         return value
 
@@ -606,13 +637,7 @@ class Tree:
         """
         Update the beliefs of this tree using the parent tree.
         """
-        model = self.forest.owner.model
         parent_tree = self.forest.get_parent_tree(self)
-        orig_root_nodes = self.root_nodes
-
-        # for root_node in self.root_nodes:
-        #     assert(set(root_node.child_nodes.keys()) ==
-        #            set(possible_actions(model=model, agent=self.agent)).union({action.NO_TURN}))
 
         ### 1. Find new root nodes
         root_nodes = list(
@@ -622,163 +647,54 @@ class Tree:
         )
         self.root_nodes = []
 
-        # store calculated weights of particles in parent tree root node(s)
-        # for each root node
-        compatible_particle_weights = dict()
-
-        ### 2. Determine weights of new root nodes
+        ### 2. Prune new root nodes that are no longer needed (will never be expanded
+        ###    because the agent action histories they represent are no longer present
+        ###    in particles on the level above)
         for root_node in root_nodes:
-            # if root node does not have particles, it has not been deemed
-            # very important in the planning phase. Therefore we prune it
-            # if len(root_node.particles) == 0:
-            #     continue
-
-            compatible_particle_weights[root_node] = dict()
-
-            for parent_root_node in parent_tree.root_nodes:
-                weight_sum = sum(p.weight for p in parent_root_node.belief)
-
-                particle_weights = {
-                    p: (p.weight / weight_sum) * parent_root_node.root_node_weight
-                    for p in parent_root_node.belief
-                    if (
-                        p.agent_action_history(self.agent)
-                        == root_node.agent_action_history
-                    )
-                }
-
-                compatible_particle_weights[root_node].update(particle_weights)
-
-            root_node_weight = sum(compatible_particle_weights[root_node].values())
-            root_node.root_node_weight = root_node_weight
-
-        # prune nodes with 0 weight
-        root_nodes = [n for n in root_nodes if n.root_node_weight > 0]
-
-        if len(root_nodes) == 0:
-            print("No root nodes left after weighting")
-
-        # temporarily normalise root node weights to get the numbers of
-        # reinvigoration particles right. Note that these may not be the
-        # final weights, as some root nodes may still be pruned
-        root_node_weight_sum = sum(n.root_node_weight for n in root_nodes)
-        for n in root_nodes:
-            n.root_node_weight /= root_node_weight_sum
-
-        ### 3. Create a belief for new root node
-        for root_node in root_nodes:
-            # particles matching this root node from parent root nodes
-            node_compatible_particles = tuple(
-                compatible_particle_weights[root_node].keys()
+            # check all parent tree root nodes for matching particles
+            parent_particles = (
+                p
+                for parent_root_node in parent_tree.root_nodes
+                for p in parent_root_node.particles
             )
-            node_compatible_particle_weight_sum = sum(
-                compatible_particle_weights[root_node].values()
-            )
-            node_compatible_particle_weights = tuple(
-                w / node_compatible_particle_weight_sum
-                for w in compatible_particle_weights[root_node].values()
-            )
+            for p in parent_particles:
+                if p.agent_action_history(self.agent) == root_node.agent_action_history:
+                    # found a matching particle, so this root node gets to stay.
+                    break
 
-            # create new particles by reinvigorating
-            reinvig_particles = root_node.generate_reinvigorated_particles()
-
-            particles_to_weight = root_node.particles + reinvig_particles
-            belief = {p: 0 for p in particles_to_weight}
-            n_samples = model.n_belief_update_samples
-
-            # choose compatible particles for each sample
-            particles = model.random.choices(
-                node_compatible_particles,
-                weights=node_compatible_particle_weights,
-                k=n_samples,
-            )
-
-            for particle in particles:
-                # simulate an observation for the current tree agent
-                obs = ipomdp.sample_observation(
-                    state=particle.state,
-                    action=particle.joint_action_history[-1],
-                    agent=self.agent,
-                    model=model,
-                )
-
-                # weight particles
-                weight_particles(
-                    particles=particles_to_weight,
-                    observation=obs,
-                    agent=self.agent,
-                    model=model,
-                )
-                particle_weights = tuple(p.weight for p in particles_to_weight)
-
-                # if all weights are zero, this means none of the particles
-                # are possible representations of the world under this
-                # observation. In that case we simply try again
-                if sum(particle_weights) == 0:
-                    n_samples -= 1
-                    continue
-
-                # sample particle
-                particle = model.random.choices(
-                    particles_to_weight, weights=particle_weights
-                )[0]
-
-                # add to the counts
-                belief[particle] += 1
-
-            # if there were no successful samples, this means that none of the
-            # particles we have are representative of the model state.
-            # Therefore we prune the node.
-            if n_samples == 0:
-                print(
-                    "No successful samples, pruning root node",
-                    root_node.agent_action_history,
-                )
-                continue
             else:
-                # normalise and save beliefs
-                for particle in particles_to_weight:
-                    particle.weight = belief[particle] / n_samples
+                # no matching particles, so root node is pruned
+                continue
 
-            # generate belief particles
-            root_node.generate_root_belief(particles=particles_to_weight)
+            # if root node does not have particles, it has not been deemed
+            # very important in the planning phase. It can also not be used for
+            # planning anymore. Therefore we prune it.
+            if len(root_node.particles) == 0:
+                print("Pruning root node with no particles (can cause issues!)")
+                continue
+
+            # update beliefs about interactive states at the level below
+            root_node.update_lower_beliefs()
 
             # remove references to previous particles
             for particle in root_node.particles:
                 particle.previous_particle = None
 
-            weight_sum = sum(p.weight for p in root_node.belief)
-            assert round(weight_sum, 4) == 1
+            # remove reference to parent node
+            root_node.parent_node = None
 
-            # add finished root node to tree
+            # add to set of root nodes
             self.root_nodes.append(root_node)
 
         if len(self.root_nodes) == 0:
             print("No root nodes left")
 
-        # if there are too many root nodes, only choose the 10 most probable
-        # ones
-        # if len(self.root_nodes) > 10:
-        #     top_nodes = sorted(self.root_nodes, key=lambda x: x.root_node_weight)[-10:]
-        #     self.root_nodes = top_nodes
-
-        # normalise weights of root nodes. Sometimes they do not sum to 1
-        # if a new root node is pruned because no observation generated is
-        # compatible with any particle in it
-        root_node_weight_sum = sum(n.root_node_weight for n in self.root_nodes)
-        for n in self.root_nodes:
-            n.root_node_weight /= root_node_weight_sum
-
-        # print(f"{self.signature}:",
-        #         *(f"({n.agent_action_history}, {n.root_node_weight:.3f})"
-        #         for n in self.root_nodes))
         print(
             f"{self.signature}:",
             len(self.root_nodes),
             sorted(
                 list(
                     (
-                        f"{n.root_node_weight:.2f}",
                         len(n.particles),
                         n.agent_action_history[-1],
                     )
@@ -813,33 +729,32 @@ class Tree:
                     an effect if explore is False.
 
         Return value:
-        A (next_action, action_unvisited) tuple, where action_unvisited
+        A (next_action, action_unvisited) tuple where action_unvisited
         indicates whether the given action is unvisited under the current
         belief (thus indicating that a rollout policy should be used next).
         """
         model = node.tree.forest.owner.model
 
-        # check that all particles have weights and actions
+        assert node.tree == self
+
+        # check that all particles have weights
         assert sum(p.weight is None for p in node.particles) == 0
-        assert sum(p.next_agent_action is None for p in node.particles) == 0
 
         # calculate necessary quantities
         actions = self.agent.possible_actions()
         N = sum(
-            particle.weight > 0
-            for particle in node.particles
-            if particle.next_agent_action != action.NO_TURN
+            particle.n_expansions for particle in node.particles if particle.weight > 0
         )
         W_a = tuple(
-            sum(p.weight for p in node.particles if p.next_agent_action == act)
+            sum(p.weight * p.n_expansions_act[act] for p in node.particles)
             for act in actions
         )
         W = sum(W_a)
 
-        if explore and 0 in W_a:
+        if explore and min(W_a) < 1e-10:
             # if there are unexpanded actions under this belief, sample one
             unexpanded_actions = tuple(
-                action for action, weight in zip(actions, W_a) if weight == 0
+                action for action, weight in zip(actions, W_a) if weight < 1e-10
             )
             return model.random.choice(unexpanded_actions), True
 
@@ -860,29 +775,29 @@ class Tree:
             )
 
         assert len(W_a) > 0
-        W_tilde = tuple((w_a / W) * N for w_a in W_a)
+        N_a = tuple((w_a / W) * N for w_a in W_a)
 
         # calculate values of different actions
         Q = tuple(
             sum(
-                p.weight * p.value
+                p.weight * p.act_value[action]
                 for p in node.particles
-                if p.next_agent_action == action
+                if p.n_expansions_act[action] > 0
             )
-            / weight
-            for action, weight in zip(actions, W_a)
+            / sum(p.weight for p in node.particles if p.n_expansions_act[action] > 0)
+            for action in actions
         )
 
         if explore:
             # add exploration bonuses
             Q = tuple(
-                q + model.exploration_coef * np.sqrt(np.log(N) / w_tilde)
-                for w_tilde, q in zip(W_tilde, Q)
+                q + model.exploration_coef * math.sqrt(math.log(N) / n_a)
+                for n_a, q in zip(N_a, Q)
             )
 
         if not explore and softargmax:
             # use softargmax to calculate weights of different actions
-            action_weights = tuple(np.exp(w_tilde / np.sqrt(N)) for w_tilde in W_tilde)
+            action_weights = tuple(math.exp(n_a / math.sqrt(N)) for n_a in N_a)
             action_weight_sum = sum(action_weights)
             action_weights = tuple(w / action_weight_sum for w in action_weights)
 
@@ -898,13 +813,7 @@ class Tree:
 class Node:
     """
     A single node in a tree. Corresponds to a specific agent action history.
-
-    A node contains a set of particles. In addition, a node at the root of the
-    tree contains a set of belief particles which represent the belief of the
-    tree agent about the current state of the world.
-
-    A root node of a tree can also have a root_node_weight attribute, which
-    denotes its likelihood in comparison to other root nodes.
+    A node contains a set of particles.
     """
 
     def __init__(
@@ -912,18 +821,13 @@ class Node:
         tree: Tree,
         agent_action_history: AgentActionHistory,
         parent_node: Node,
-        initial_belief: Belief = None,
     ) -> None:
         """
         Initialise the node.
 
         Keyword arguments:
-        tree: the tree object this node belongs to.
-        agent_action_history: the agent action history this node corresponds \
-                              to
-        initial_belief: set of (unweighted) states representing the initial \
-                        belief in this tree. Applicable only if this node is \
-                        a root node with empty action history.
+        tree: the tree object this node belongs to
+        agent_action_history: the agent action history this node corresponds to
         """
         self.tree = tree
         self.agent_action_history = agent_action_history
@@ -931,19 +835,48 @@ class Node:
         self.particles = []
         self.parent_node = parent_node
         self.child_nodes = dict()
-        self.belief = None
 
-        if initial_belief is not None:
-            self.belief = [
-                BeliefParticle(
-                    state=state,
-                    joint_action_history=(),
-                    weight=1 / len(initial_belief),
-                    node=self,
-                )
-                for state in initial_belief
-            ]
-            self.root_node_weight = 1
+    def create_initial_particles(self) -> None:
+        """
+        Create particles corresponding to initial beliefs.
+        """
+        model = self.tree.forest.owner.model
+        in_top_level_tree = self.tree.level == self.tree.forest.owner.level
+        in_bottom_level_tree = self.tree.level == 0
+
+        initial_particle_states = ipomdp.sample_init(
+            n_samples=model.n_root_belief_samples,
+            model=model,
+            agent=self.tree.agent if in_top_level_tree else None,  # TODO
+        )
+
+        # create particles
+        self.particles = [
+            Particle(state=state, joint_action_history=(), node=self)
+            for state in initial_particle_states
+        ]
+
+        # if the node is the root node in some other tree than level 0, assign weights
+        # to particles in the root nodes on the level below
+        if not in_bottom_level_tree:
+            for child_tree in self.tree.forest.child_trees(parent_tree=self.tree):
+                # find root node in the child tree
+                assert len(child_tree.root_nodes) == 1
+                child_tree_root_node = child_tree.root_nodes[0]
+
+                # find number of particles
+                n_particles = len(child_tree_root_node.particles)
+                assert n_particles == model.n_root_belief_samples
+
+                # assign uniform weights
+                particle_weights = n_particles * (1 / n_particles,)
+                for particle in self.particles:
+                    particle.lower_particle_dist[child_tree.agent] = particle_weights
+
+        # if the node is in the top level tree, its particles need weights
+        if in_top_level_tree:
+            for particle in self.particles:
+                particle.weight = 1 / len(initial_particle_states)
 
     def __repr__(self) -> str:
         if self.belief is None:
@@ -975,27 +908,79 @@ class Node:
         Add weights to each particle in self according to how likely they
         are under the given observation
         """
-        weight_particles(
+        weights = weight_particles(
             particles=self.particles,
             observation=observation,
             agent=self.tree.agent,
             model=self.tree.forest.owner.model,
         )
 
-    def generate_root_belief(self, particles: Iterable[Particle]):
+        # save weights
+        for particle, weight in zip(self.particles, weights, strict=True):
+            particle.weight = weight
+
+    def update_lower_beliefs(self):
         """
-        Convert given particles into belief particles and save them in the
-        root node belief particle set.
+        Creates beliefs over lower-level interactive states in each particle in this
+        node by updating prior beliefs.
+
+        Assumes that particles still have a reference to previous particles.
         """
-        self.belief = [
-            BeliefParticle(
-                state=p.state,
-                joint_action_history=p.joint_action_history,
-                weight=p.weight,
-                node=self,
-            )
-            for p in particles
-        ]
+        if self.tree.level == 0:
+            return
+
+        forest = self.tree.forest
+        model = forest.owner.model
+
+        other_agents = (ag for ag in model.agents if ag != self.tree.agent)
+
+        for other_agent in other_agents:
+            for particle in self.particles:
+                # simulate an observation for the other agent given this particle
+                other_agent_obs = ipomdp.sample_observation(
+                    state=particle.state,
+                    action=particle.joint_action_history[-1],
+                    agent=other_agent,
+                    model=model,
+                )
+
+                # find particles in the lower tree to assign weights to
+                try:
+                    lower_node = forest.get_matching_lower_node(
+                        particle=particle, agent=other_agent
+                    )
+                except Exception:
+                    # couldn't find the corresponding node. This is worrying, but let's
+                    # try to keep going
+                    print(
+                        f"Couldn't find a lower level node based on particle {particle.joint_action_history} in tree {self.tree.signature}"
+                    )
+                    continue
+
+                # find prior weights
+                prior_weights = {
+                    p: w
+                    for p, w in zip(
+                        lower_node.parent_node.particles,
+                        particle.previous_particle.lower_particle_dist[other_agent],
+                        strict=True,
+                    )
+                }
+                prior_weights = tuple(
+                    prior_weights[p.previous_particle] for p in lower_node.particles
+                )
+
+                # update
+                posterior_weights = weight_particles(
+                    particles=lower_node.particles,
+                    observation=other_agent_obs,
+                    agent=other_agent,
+                    model=model,
+                    prior_weights=prior_weights,
+                )
+
+                # save
+                particle.lower_particle_dist[other_agent] = posterior_weights
 
     def generate_reinvigorated_particles(self) -> List[Particle]:
         """
@@ -1072,10 +1057,12 @@ class Particle:
     A particle consists of
     - a model state
     - a joint action history
-    - the next agent action
+    - a distribution for particles for each agent in the trees one level below (empty
+      for particles in a level 0 tree)
+    - number of times the particle has been expanded with each of the possible actions
+    - for each possible action, the value of choosing the next agent action and then
+      continuing optimally afterwards
     - a weight to represent belief (changes and can be empty)
-    - the value of choosing the next agent action and then continuing optimally
-      afterwards
     - a reference to the previous particle (is empty for particles in a root node)
     """
 
@@ -1084,18 +1071,22 @@ class Particle:
         state: State,
         joint_action_history: JointActionHistory,
         node: Node,
-        next_agent_action: AgentAction | None = None,
-        value: float | None = None,
-        weight: int | None = None,
+        weight: float | None = None,
         previous_particle: Particle | None = None,
     ) -> None:
         self.state = state
         self.joint_action_history = joint_action_history
         self.node = node
-        self.next_agent_action = next_agent_action
-        self.value = value
+        self.lower_particle_dist = dict()
         self.weight = weight  # can be None
         self.previous_particle = previous_particle  # can be None
+
+        # initialise dictionaries tracking number of times expanded and average values
+        agent = node.tree.agent
+        possible_actions = agent.possible_actions()
+        self.n_expansions = 0
+        self.n_expansions_act = {act: 0 for act in possible_actions}
+        self.act_value = {act: 0 for act in possible_actions}
 
     def agent_action_history(
         self, agent: civilisation.Civilisation
@@ -1105,6 +1096,27 @@ class Particle:
         joint action history stored in the particle.
         """
         return joint_to_agent_action_history(self.joint_action_history, agent=agent)
+
+    def add_expansion(self, agent_action: AgentAction, value: float) -> None:
+        """
+        Add information about an expansion performed starting from the node.
+
+        Keyword arguments:
+        agent_action: first action taken by agent in the expansion
+        value: value received for taking this action and continuing optimally afterwards
+        """
+        assert agent_action in self.n_expansions_act
+
+        prev_n_expansions = self.n_expansions_act[agent_action]
+        prev_value = self.act_value[agent_action]
+
+        # calculate new average value based on previous average and the new value
+        new_value = prev_value + (value - prev_value) / (prev_n_expansions + 1)
+
+        # update information
+        self.n_expansions += 1
+        self.n_expansions_act[agent_action] += 1
+        self.act_value[agent_action] = new_value
 
     def __repr__(self) -> str:
         model = self.node.tree.forest.owner.model
@@ -1116,49 +1128,4 @@ class Particle:
             f"Particle(levels {levels}, "
             + f"{self.joint_action_history}, {self.next_agent_action}, "
             + f"weight {self.weight}, value {self.value})"
-        )
-
-
-class BeliefParticle:
-    """
-    A set of belief particles represents a belief about the model state and the
-    actions that have taken place so far.
-
-    Each particle consists of:
-    - a model state
-    - a joint action history
-    - a weight
-    """
-
-    def __init__(
-        self,
-        state: State,
-        joint_action_history: JointActionHistory,
-        weight: float | None,
-        node: Node,
-    ) -> None:
-        self.state = state
-        self.joint_action_history = joint_action_history
-        self.weight = weight
-        self.node = node
-
-    def agent_action_history(
-        self, agent: civilisation.Civilisation
-    ) -> AgentActionHistory:
-        """
-        Returns the agent action history of the given agent, extracted from the
-        joint action history stored in the particle.
-        """
-        return joint_to_agent_action_history(self.joint_action_history, agent=agent)
-
-    def __repr__(self) -> str:
-        model = self.node.tree.forest.owner.model
-        levels = [
-            round(growth.tech_level(state=agent_state, model=model), 2)
-            for agent_state in self.state
-        ]
-        return (
-            f"BeliefParticle(levels {levels}, "
-            + f"{self.joint_action_history}, "
-            + f"weight {self.weight})"
         )

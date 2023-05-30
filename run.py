@@ -12,10 +12,9 @@ params = {
     "agent_growth": growth.sigmoid_growth,
     "agent_growth_params": {"speed_range": (0.3, 1), "takeoff_time_range": (10, 100)},
     "rewards": {"destroyed": -1, "hide": -0.01, "attack": 0},
-    "n_root_belief_samples": 1000,
-    "n_tree_simulations": 200,
-    "n_belief_update_samples": 200,
-    "n_reinvigoration_particles": 100,
+    "n_root_belief_samples": 50,
+    "n_tree_simulations": 500,
+    "n_reinvigoration_particles": 0,
     "obs_noise_sd": 0.1,
     "reasoning_level": 2,
     "action_dist_0": "random",
@@ -34,7 +33,7 @@ n_steps = 100
 # create a universe
 mdl = universe.Universe(debug=True, seed=0, **params)
 # simulate
-for id in tqdm(range(n_steps)):
+for i in tqdm(range(n_steps)):
     mdl.step()
 
 # retrieve data

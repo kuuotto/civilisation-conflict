@@ -14,7 +14,6 @@ class Universe(mesa.Model):
         rewards,
         n_root_belief_samples,
         n_tree_simulations,
-        n_belief_update_samples,
         n_reinvigoration_particles,
         obs_noise_sd,
         reasoning_level,
@@ -47,8 +46,6 @@ class Universe(mesa.Model):
                                representing beliefs at root nodes of trees
         n_tree_simulations: the number of simulations to perform on each tree \
                             when planning
-        n_belief_update_samples: number of samples to do when updating \
-                                 beliefs of lower level trees
         n_reinvigoration_particles: number of additional particles to create \
                                     for each tree when updating beliefs
         obs_noise_sd: standard deviation of technosignature observation noise \
@@ -92,7 +89,6 @@ class Universe(mesa.Model):
         self.rewards = rewards
         self.n_root_belief_samples = n_root_belief_samples
         self.n_tree_simulations = n_tree_simulations
-        self.n_belief_update_samples = n_belief_update_samples
         self.n_reinvigoration_particles = n_reinvigoration_particles
         self.obs_noise_sd = obs_noise_sd
         self.reasoning_level = reasoning_level
@@ -166,10 +162,15 @@ class Universe(mesa.Model):
             x, y = self.rng.random(size=2)
             self.space.place_agent(agent, (x, y))
 
+        # initialise distance cache
+        self._init_distance_cache()
+
+        # initialise model state
+        self._init_state()
+
         # after all agents have been created, initialise their trees
         for agent in self.agents:
             agent.initialise_forest()
-            agent._init_action_set()
 
         # initialise data collection
         self.datacollector = mesa.DataCollector(
@@ -189,12 +190,6 @@ class Universe(mesa.Model):
                 ]
             },
         )
-
-        # initialise model state
-        self._init_state()
-
-        # initialise distance cache
-        self._init_distance_cache()
 
         # keep track of the last action
         self.previous_action = None

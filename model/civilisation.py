@@ -51,6 +51,10 @@ class Civilisation(mesa.Agent):
         # keep track of previous action
         self.previous_agent_action = action.NO_TURN
 
+        # store the set of possible actions for this agent (will be determined once
+        # it is requested)
+        self._action_set = None
+
     def initialise_forest(self):
         """Create belief trees"""
         self.forest = ipomdp_solver.BeliefForest(owner=self)
@@ -67,6 +71,9 @@ class Civilisation(mesa.Agent):
         constrain the actions to only those that the agent is currently
         capable of.
         """
+        if self._action_set == None:
+            self._init_action_set()
+
         if state is None:
             return self._action_set
 

@@ -1,4 +1,5 @@
 import numpy as np
+import math
 
 
 def influence_radius(tech_level):
@@ -8,14 +9,14 @@ def influence_radius(tech_level):
 
     TODO: define more rigorously
     """
-    return 0.1 * np.tan(tech_level * (np.pi / 2))
+    return 0.1 * np.tan(tech_level * (math.pi / 2))
 
 
 def inv_influence_radius(inf_radius):
     """
     Gives the tech level corresponding to a given influence radius
     """
-    return (2 / np.pi) * np.arctan(10 * inf_radius)
+    return (2 / math.pi) * np.arctan(10 * inf_radius)
 
 
 def sigmoid_growth(time, speed, takeoff_time):
@@ -48,5 +49,5 @@ def tech_level(state, model):
         return sigmoid_growth(
             time=state[..., 0], speed=state[..., 2], takeoff_time=state[..., 3]
         )
-    else:
-        raise NotImplementedError()
+
+    raise NotImplementedError()
