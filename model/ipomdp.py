@@ -104,6 +104,15 @@ def transition(
         print(action_, actor, actor_action)
         raise Exception("Incorrect action format")
 
+    # add noise to growth parameters (TODO: add noise as a model parameter)
+    state[:, 2] += model.rng.normal(loc=0, scale=0.03, size=model.n_agents)
+    state[:, 2] = state[:, 2].clip(*model.agent_growth_params["speed_range"])
+
+    state[:, 3] += model.rng.integers(
+        low=-3, high=3, endpoint=True, size=model.n_agents
+    )
+    state[:, 3] = state[:, 3].clip(*model.agent_growth_params["takeoff_time_range"])
+
     return state
 
 
@@ -309,12 +318,17 @@ def prob_observation(
     expected_observation[agent.id] = tech_levels[agent.id]
 
     # find individual densities of observations and multiply
+    # TODO: optimise
     density = math.prod(
         _norm_pdf(x=obs, mean=exp, sd=model.obs_noise_sd)
-        for ag, obs, exp in zip(
-            model.agents, observation[: model.n_agents], expected_observation
-        )
         if ag in observed_agents
+        else _norm_pdf(x=0, mean=0, sd=model.obs_noise_sd)
+        for ag, obs, exp in zip(
+            model.agents,
+            observation[: model.n_agents],
+            expected_observation,
+            strict=True,
+        )
     )
 
     return density
@@ -401,18 +415,17 @@ def sample_observation(
 
     # calculate tech levels
     tech_levels = growth.tech_level(state=state, model=model)
-    agent_tech_level = tech_levels[agent.id]
 
     # calculate technosignatures
     technosignatures = tech_levels * state[:, 1]
 
     # find neighbours
     nbrs = model.get_agent_neighbours(
-        agent=agent, radius=growth.influence_radius(agent_tech_level)
+        agent=agent, radius=growth.influence_radius(tech_levels[agent.id])
     )
 
     # add noise to agent's own tech level and others' technosignatures
-    agent_tech_level += model.random.gauss(mu=0, sigma=model.obs_noise_sd)
+    tech_levels[agent.id] += model.random.gauss(mu=0, sigma=model.obs_noise_sd)
     technosignatures += model.rng.normal(
         loc=0, scale=model.obs_noise_sd, size=model.n_agents
     )
