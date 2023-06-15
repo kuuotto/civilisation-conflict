@@ -6,7 +6,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from matplotlib.animation import ArtistAnimation
-from model import analyse
+from model import analyse, ipomdp_solver, universe, growth
+from typing import List
 
 
 def draw_universe(
@@ -323,5 +324,78 @@ def plot_streak_length_distribution(action_data, **params):
     ax.set_title("Distribution of Attack Streak Lengths")
     ax.grid()
     fig.supxlabel(_get_caption(**params))
+
+    plt.show()
+
+
+def plot_particles(particles: List[ipomdp_solver.Particle], model: universe.Universe):
+    """
+    Plots the particles in the list. This creates n_agents subplots, each depicting the
+    state of the corresponding agent. The horizontal axes show the age of the
+    civilisations and the vertical axis corresponds to the visibility factor.
+
+    If particles have weights, they are visually represented by the size of the points.
+
+    If the model uses sigmoid growth for agents, the horizontal axis corresponds to
+    time until takeoff (takeoff_time - age) as this is what determines technology
+    levels.
+    """
+
+    n_agents = particles[0].state.shape[0]
+    fig, axs = plt.subplots(
+        nrows=1, ncols=n_agents, constrained_layout=True, figsize=(n_agents * 4, 4)
+    )
+
+    states = np.stack(tuple(p.state for p in particles), axis=0)
+    weights = tuple(p.weight for p in particles)
+
+    show_weights = sum(p.weight is None for p in particles) == 0
+
+    if model.agent_growth == growth.sigmoid_growth:
+        x_vals = growth.tech_level(state=states, model=model)
+        # x_vals = states[..., 0] - states[..., 3]
+        y_vals = states[..., 1]
+
+    else:
+        raise NotImplementedError()
+
+    for ag_id, ax in enumerate(axs):
+        ag_x = x_vals[:, ag_id]
+        ag_y = y_vals[:, ag_id]
+
+        # add some noise
+        # ag_x += model.rng.uniform(low=-0.5, high=0.5, size=len(ag_x))
+        ag_y += model.rng.uniform(low=-0.01, high=0.01, size=len(ag_y))
+
+        if show_weights:
+            min_size, max_size = 1, 40
+            if max(weights) == 0:
+                point_sizes = (min_size,) * len(particles)
+            else:
+                point_sizes = tuple(
+                    min_size + (max_size - min_size) / max(weights) * w for w in weights
+                )
+            ax.scatter(
+                x=ag_x,
+                y=ag_y,
+                s=point_sizes,
+                c=tuple(
+                    "red" if w == 0 else ("blue" if w > 1e-6 else "green")
+                    for w in weights
+                ),
+            )
+        else:
+            ax.scatter(x=ag_x, y=ag_y)
+
+        ax.set_xlim(0 - 0.02, 1 + 0.02)
+        ax.set_ylim(y_vals.min() - 0.02, y_vals.max() + 0.02)
+        ax.set_title(f"Agent {ag_id}")
+        ax.grid()
+
+    fig.supxlabel(
+        "Technology level" if model.agent_growth == growth.sigmoid_growth else "Age"
+    )
+    fig.supylabel("Visibility factor")
+    fig.suptitle("Particle states")
 
     plt.show()
