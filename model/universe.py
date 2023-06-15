@@ -1,7 +1,7 @@
 import mesa
 import numpy as np
 
-from model import civilisation, growth
+from model import civilisation, growth, ipomdp
 from typing import Tuple
 
 
@@ -168,6 +168,9 @@ class Universe(mesa.Model):
         # initialise model state
         self._init_state()
 
+        # initialise constants used
+        self._init_constants()
+
         # after all agents have been created, initialise their trees
         for agent in self.agents:
             agent.initialise_forest()
@@ -219,6 +222,12 @@ class Universe(mesa.Model):
 
         return self._state
 
+    def _init_constants(self) -> None:
+        """
+        Pre-calculates some constants used in the I-POMDP solver.
+        """
+        self.obs_prob_const = ipomdp._norm_pdf(x=0, mean=0, sd=self.obs_noise_sd)
+
     def _init_distance_cache(self) -> None:
         """
         Calculates distances between all agents and stores these. This is used
@@ -239,32 +248,57 @@ class Universe(mesa.Model):
                 self._distances[i, j] = distance
                 self._distances[j, i] = distance
 
+        # stores distances as equivalent technology levels -- using these means that
+        # influence radii do not have to be calculated during the simulations
+        self._distances_tech_level = growth.inv_influence_radius(self._distances)
+
     def get_agent_neighbours(
-        self, agent: civilisation.Civilisation, radius: float
+        self,
+        agent: civilisation.Civilisation,
+        radius: float = None,
+        tech_level: float = None,
     ) -> Tuple[civilisation.Civilisation]:
         """
-        Find neighbours of agent given a radius.
+        Find neighbours of agent given a radius or a technology level.
+
+        If both a radius and a technology level are supplied, the former takes precedence.
 
         This is more efficient than the method of the mesa space module,
         because this uses the pre-generated array of agent distances. We can
         do this because agents do not move in our model.
         """
-        return tuple(
-            ag
-            for ag in self.agents
-            if self._distances[agent.id, ag.id] < radius and ag != agent
-        )
+        if radius is not None:
+            return tuple(
+                ag
+                for ag in self.agents
+                if self._distances[agent.id, ag.id] < radius and ag != agent
+            )
+        elif tech_level is not None:
+            return tuple(
+                ag
+                for ag in self.agents
+                if self._distances_tech_level[agent.id, ag.id] < tech_level
+                and ag != agent
+            )
+
+        raise Exception("Either a radius or a technology level must be supplied.")
 
     def is_neighbour(
         self,
         agent1: civilisation.Civilisation,
         agent2: civilisation.Civilisation,
-        radius: float,
+        radius: float = None,
+        tech_level: float = None,
     ) -> bool:
         """
         Checks if distance between the agents is less than radius.
         """
-        return self._distances[agent1.id, agent2.id] < radius
+        if radius is not None:
+            return self._distances[agent1.id, agent2.id] < radius
+        if tech_level is not None:
+            return self._distances_tech_level[agent1.id, agent2.id] < tech_level
+
+        raise Exception("Either a radius or a technology level must be supplied.")
 
 
 class SingleActivation(mesa.time.BaseScheduler):

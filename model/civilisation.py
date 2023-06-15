@@ -77,12 +77,10 @@ class Civilisation(mesa.Agent):
         if state is None:
             return self._action_set
 
-        agent_influence_rad = growth.influence_radius(
-            growth.tech_level(state=state[self.id], model=self.model)
-        )
+        agent_tech_level = growth.tech_level(state=state[self.id], model=self.model)
 
         return (action.NO_ACTION, action.HIDE) + self.model.get_agent_neighbours(
-            agent=self, radius=agent_influence_rad
+            agent=self, tech_level=agent_tech_level
         )
 
     def step_tech_level(self):

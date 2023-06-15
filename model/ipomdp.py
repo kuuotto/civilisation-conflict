@@ -3,14 +3,13 @@
 # avoids having to give type annotations as strings
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Tuple
 
 if TYPE_CHECKING:
     # avoid circular imports with type hints
     from model import universe, ipomdp_solver
 
 import numpy as np
-import math
 from model import growth, action, civilisation, ipomdp_solver
 
 
@@ -26,9 +25,7 @@ def _norm_pdf(x, mean, sd):
     mean: mean of the distribution
     sd: standard deviation of the distribution
     """
-    return (1 / (sd * math.sqrt(2 * math.pi))) * math.exp(
-        -(1 / 2) * ((x - mean) / sd) ** 2
-    )
+    return (1 / (sd * np.sqrt(2 * np.pi))) * np.exp(-(1 / 2) * ((x - mean) / sd) ** 2)
 
 
 def transition(
@@ -71,9 +68,6 @@ def transition(
         raise NotImplementedError("Multiple actors are not yet supported")
     actor, actor_action = next(iter(action_.items()))
 
-    # always tick everyone's time by one
-    state[:, 0] += 1
-
     if actor_action == action.HIDE:
         # if actor hides, additionally update their visibility
         state[actor.id, 1] *= model.visibility_multiplier
@@ -86,32 +80,40 @@ def transition(
         tech_levels = growth.tech_level(state=state, model=model)
 
         # determine if actor is capable of attacking target
-        actor_influence_radius = growth.influence_radius(tech_levels[actor.id])
         actor_capable = model.is_neighbour(
-            agent1=actor, agent2=target, radius=actor_influence_radius
+            agent1=actor, agent2=target, tech_level=tech_levels[actor.id]
         )
 
         if (actor_capable and tech_levels[actor.id] > tech_levels[target.id]) or (
             actor_capable
             and tech_levels[actor.id] == tech_levels[target.id]
-            and model.rng.random() > 0.5
+            and model.rng.random() > 1.5
         ):
             # civilisation is destroyed
-            state[target.id, 0] = 0  # reset time
+            state[target.id, 0] = -1  # reset time
             state[target.id, 1] = 1  # visibility factor
 
     elif actor_action != action.NO_ACTION:
         print(action_, actor, actor_action)
         raise Exception("Incorrect action format")
 
-    # add noise to growth parameters (TODO: add noise as a model parameter)
-    state[:, 2] += model.rng.normal(loc=0, scale=0.03, size=model.n_agents)
-    state[:, 2] = state[:, 2].clip(*model.agent_growth_params["speed_range"])
+    # always tick everyone's time by one
+    state[:, 0] += 1
 
-    state[:, 3] += model.rng.integers(
-        low=-3, high=3, endpoint=True, size=model.n_agents
-    )
-    state[:, 3] = state[:, 3].clip(*model.agent_growth_params["takeoff_time_range"])
+    # add noise to growth parameters (TODO: add noise as a model parameter)
+    # if model.agent_growth == growth.sigmoid_growth:
+    #     speed_range = model.agent_growth_params["speed_range"]
+    #     takeoff_time_range = model.agent_growth_params["takeoff_time_range"]
+
+    #     if speed_range[0] < speed_range[1]:
+    #         state[:, 2] += model.rng.normal(loc=0, scale=0.03, size=model.n_agents)
+    #         state[:, 2] = state[:, 2].clip(*speed_range)
+
+    #     if takeoff_time_range[0] < takeoff_time_range[1]:
+    #         state[:, 3] += model.rng.integers(
+    #             low=-3, high=3, endpoint=True, size=model.n_agents
+    #         )
+    #         state[:, 3] = state[:, 3].clip(*takeoff_time_range)
 
     return state
 
@@ -157,9 +159,8 @@ def reward(
     tech_levels = growth.tech_level(state=state, model=model)
 
     # determine if actor is capable of attacking target
-    actor_influence_radius = growth.influence_radius(tech_levels[actor.id])
     actor_capable = model.is_neighbour(
-        agent1=actor, agent2=target, radius=actor_influence_radius
+        agent1=actor, agent2=target, tech_level=tech_levels[actor.id]
     )
 
     # if the actor is not capable of attacking, it's as if the attack never
@@ -184,18 +185,19 @@ def reward(
 
 def prob_observation(
     observation: ipomdp_solver.Observation,
-    state: ipomdp_solver.State,
-    action: ipomdp_solver.Action,
-    agent: civilisation.Civilisation,
+    states: ipomdp_solver.State,
+    actions: Tuple(ipomdp_solver.Action),
+    observer: civilisation.Civilisation,
     model: universe.Universe,
-    tech_levels=None,
-    agent_influence_radius=None,
-    prev_influence_radii=None,
 ) -> float:
     """
     Returns the probability (density) of a given observation by “agent”, given
     that the system is currently in state “state” and the previous action was
     “action”.
+
+    State can be a single state (a 2d array) or a stack of states (a 3d array), in which
+    case an array of corresponding length is returned. With multiple states multiple
+    actions should also be supplied.
 
     Technosignature observations from each agent are assumed to have Gaussian
     observation noise, which is saved in the model's obs_noise_sd attribute.
@@ -203,135 +205,138 @@ def prob_observation(
     Keyword arguments:
     observation: the observation received
     state: the current (assumed) system state
-    action_: previous action
-    agent: the observing Civilisation
+    action: previous action
+    observer: the observing Civilisation
     model: a Universe. Used for determining distances between civilisations.
-    tech_levels: an array of length n_agents where each value represents the
-                 technology level of each agent in state. Can be supplied to increase
-                 performance when calculating probabilities for multiple particles at
-                 once.
-    agent_influence_radius: the influence radius of agent in state. Can be supplied
-                            to increase performance when calculating proabilities for
-                            multiple particles at once.
-    prev_influence_radii: an array of length n_agents where each value represents the
-                          influence radius of each agent in the previous time step
-                          (assuming just passage of time). Can be supplied to increase
-                          performance when calculating probabilities for multiple
-                          particles at once.
     """
+
+    # if only a single state and action were supplied, transform them to the correct
+    # format
+    multiple_states = len(states.shape) == 3
+
+    if not multiple_states:
+        states = states[np.newaxis]
+
+    if not isinstance(actions, tuple):
+        actions = tuple((actions,))
+
+    n_states = len(states)
+
+    # make sure that there are the same number of actions and states
+    assert len(actions) == n_states
+
+    # initialise result
+    probabilities = np.ones(shape=n_states)
+
+    # calculate tech levels and previous tech levels
+    # these are of shape (n_states, n_agents)
+    tech_levels = growth.tech_level(state=states, model=model)
+    states[..., 0] -= 1
+    prev_tech_levels = growth.tech_level(state=states, model=model)
+    states[..., 0] += 1
 
     ### 1. determine if the success bits in the observation are correct
 
-    agent_attacked = agent in action and isinstance(
-        action[agent], civilisation.Civilisation
-    )
-    obs_agent_attacked = observation[-2] is not None
-
-    # check if agent was actually capable of attacking last round
-    if agent_attacked:
-        target = action[agent]
-
-        # determine previous influence radius of agent
-        if prev_influence_radii is None:
-            prev_agent_state = state[agent.id]
-            prev_agent_state[0] -= 1
-            prev_agent_tech_level = growth.tech_level(
-                state=prev_agent_state, model=model
-            )
-            prev_agent_state[0] += 1  # revert changes
-            prev_agent_influence_radius = growth.influence_radius(prev_agent_tech_level)
-        else:
-            prev_agent_influence_radius = prev_influence_radii[agent.id]
-
-        agent_capable = model.is_neighbour(
-            agent1=agent, agent2=target, radius=prev_agent_influence_radius
+    # turn actions into two arrays for convenience (both are length n_states)
+    actor_ids = np.array(tuple(actor.id for action in actions for actor in action))
+    attack_target_ids = np.array(
+        tuple(
+            target.id if isinstance(target, civilisation.Civilisation) else np.nan
+            for action in actions
+            for target in action.values()
         )
-        agent_attacked = agent_attacked and agent_capable
+    )
+
+    # array of length n_states
+    observer_attacked = (actor_ids == observer.id) & ~np.isnan(attack_target_ids)
+    obs_observer_attacked = observation[-2] is not None
+
+    # check if observer was actually capable of attacking last round
+    if observer_attacked.any():
+        # array of length k, where k <= n_states is the number of attacks
+        targets = attack_target_ids[observer_attacked]
+
+        # array of length k
+        prev_observer_tech_level = prev_tech_levels[observer_attacked, observer.id]
+
+        # array of length k
+        observer_capable = (
+            model._distances_tech_level[observer.id, targets] < prev_observer_tech_level
+        )
+
+        # agent attacked another only if it attempted to and it is capable
+        observer_attacked[observer_attacked] = observer_capable
 
     # observation should agree with the previous action about attacking
-    if agent_attacked != obs_agent_attacked:
-        return 0
+    probabilities *= observer_attacked == obs_observer_attacked
 
     # observation should agree with the state about the outcome of the attack
-    if agent_attacked:
-        target_id = action[agent].id
-        attack_successful = state[target_id, 0] == 0
+    if observer_attacked.any():
+        targets = attack_target_ids[observer_attacked]
+        attack_successful = states[observer_attacked, targets, 0] == 0
         obs_attack_successful = observation[-2]
 
-        if attack_successful != obs_attack_successful:
-            return 0
+        probabilities[observer_attacked] *= attack_successful == obs_attack_successful
 
-    agent_targeted = agent in action.values()
+    #######
+
+    observer_targeted = attack_target_ids == observer.id
     obs_agent_targeted = observation[-1] is not None
 
     # check if actor was actually capable of attacking last round
-    if agent_targeted:
-        actor = next(iter(action.keys()))
+    if observer_targeted.any():
+        # array of length j, where j <= n_states is the number of attacks on observer
+        actors = actor_ids[observer_targeted]
 
-        # determine previous influence radius of actor
-        if prev_influence_radii is None:
-            prev_actor_state = state[actor.id]
-            prev_actor_state[0] -= 1
-            prev_actor_tech_level = growth.tech_level(
-                state=prev_actor_state, model=model
-            )
-            prev_actor_state[0] += 1  # revert changes
-            prev_actor_influence_radius = growth.influence_radius(prev_actor_tech_level)
-        else:
-            prev_actor_influence_radius = prev_influence_radii[actor.id]
+        # array of length j
+        prev_actor_tech_levels = prev_tech_levels[observer_targeted, actors]
 
-        actor_capable = model.is_neighbour(
-            agent1=actor, agent2=agent, radius=prev_actor_influence_radius
+        # array of length j
+        actor_capable = (
+            model._distances_tech_level[observer.id, actors] < prev_actor_tech_levels
         )
-        agent_targeted = agent_targeted and actor_capable
+
+        # agent was targeted only if it was attempted and if the actor was capable
+        observer_targeted[observer_targeted] = actor_capable
 
     # observation should agree with previous action about being targeted
-    if agent_targeted != obs_agent_targeted:
-        return 0
+    probabilities *= observer_targeted == obs_agent_targeted
 
     # observation should agree with the state about the outcome of the attack
-    if agent_targeted:
-        attack_successful = state[agent.id, 0] == 0
+    if observer_targeted.any():
+        attack_successful = states[observer_targeted, observer.id, 0] == 0
         obs_attack_successful = observation[-1]
 
-        if attack_successful != obs_attack_successful:
-            return 0
+        probabilities[observer_targeted] *= attack_successful == obs_attack_successful
 
     ### 2. Calculate the probability from the technosignatures
 
-    # calculate tech levels
-    if tech_levels is None:
-        tech_levels = growth.tech_level(state=state, model=model)
-
-    # calculate agent influence radius
-    if agent_influence_radius is None:
-        agent_influence_radius = growth.influence_radius(tech_levels[agent.id])
-
+    observation = observation[: model.n_agents]
     # determine which agents we should have observed in the current state
-    observed_agents = model.get_agent_neighbours(
-        agent=agent, radius=agent_influence_radius
-    ) + (agent,)
-
-    # find expected observations from all agents (technosignature from
-    # neighbours, technology level from self)
-    expected_observation = tech_levels * state[:, 1]
-    expected_observation[agent.id] = tech_levels[agent.id]
-
-    # find individual densities of observations and multiply
-    # TODO: optimise
-    density = math.prod(
-        _norm_pdf(x=obs, mean=exp, sd=model.obs_noise_sd)
-        if ag in observed_agents
-        else _norm_pdf(x=0, mean=0, sd=model.obs_noise_sd)
-        for ag, obs, exp in zip(
-            model.agents,
-            observation[: model.n_agents],
-            expected_observation,
-            strict=True,
-        )
+    # array of shape (n_states, n_agents)
+    observed_agents = (
+        model._distances_tech_level[observer.id, :]
+        < tech_levels[:, observer.id][np.newaxis].T
     )
 
-    return density
+    # find expected observations from all agents
+    # - technosignature from neighbours
+    # - from non-neighbours, we “expect” the observation we actually received
+    # - technology level from self
+    # this is an array of shape (n_states, n_agents)
+    expected_observation = tech_levels * states[:, :, 1]
+    expected_observation = np.where(observed_agents, expected_observation, observation)
+    expected_observation[:, observer.id] = tech_levels[:, observer.id]
+
+    # find individual densities of observations
+    densities = _norm_pdf(
+        x=observation, mean=expected_observation, sd=model.obs_noise_sd
+    )
+
+    # multiply to get final probabilities
+    probabilities *= densities.prod(axis=1)
+
+    return probabilities
 
 
 def sample_observation(
@@ -380,11 +385,10 @@ def sample_observation(
         prev_agent_state = state[agent.id].copy()
         prev_agent_state[0] -= 1
         prev_agent_tech_level = growth.tech_level(state=prev_agent_state, model=model)
-        prev_agent_influence_radius = growth.influence_radius(prev_agent_tech_level)
         agent_capable = model.is_neighbour(
-            agent1=agent, agent2=target, radius=prev_agent_influence_radius
+            agent1=agent, agent2=target, tech_level=prev_agent_tech_level
         )
-        agent_attacked = agent_attacked and agent_capable
+        agent_attacked = agent_capable
 
     agent_targeted = agent in action.values()
 
@@ -394,9 +398,8 @@ def sample_observation(
         prev_actor_state = state[actor.id].copy()
         prev_actor_state[0] -= 1
         prev_actor_tech_level = growth.tech_level(state=prev_actor_state, model=model)
-        prev_actor_influence_radius = growth.influence_radius(prev_actor_tech_level)
         actor_capable = model.is_neighbour(
-            agent1=actor, agent2=agent, radius=prev_actor_influence_radius
+            agent1=actor, agent2=agent, tech_level=prev_actor_tech_level
         )
         agent_targeted = agent_targeted and actor_capable
 
@@ -420,11 +423,10 @@ def sample_observation(
     technosignatures = tech_levels * state[:, 1]
 
     # find neighbours
-    nbrs = model.get_agent_neighbours(
-        agent=agent, radius=growth.influence_radius(tech_levels[agent.id])
-    )
+    nbrs = model.get_agent_neighbours(agent=agent, tech_level=tech_levels[agent.id])
 
     # add noise to agent's own tech level and others' technosignatures
+    orig_tech_levels = tech_levels.copy()
     tech_levels[agent.id] += model.random.gauss(mu=0, sigma=model.obs_noise_sd)
     technosignatures += model.rng.normal(
         loc=0, scale=model.obs_noise_sd, size=model.n_agents
@@ -434,6 +436,8 @@ def sample_observation(
         t if ag == agent else (ts if ag in nbrs else model.random.random())
         for ag, t, ts in zip(model.agents, tech_levels, technosignatures)
     )
+
+    observation += tuple(orig_tech_levels)
 
     # add result bits
     observation += (target_destroyed, agent_destroyed)

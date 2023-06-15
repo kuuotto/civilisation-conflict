@@ -1,10 +1,11 @@
 import unittest
 import numpy as np
+from scipy.stats import norm
 from tests import helpers
 from model import growth, ipomdp, action
 
 
-class TestIPOMDP(unittest.TestCase):
+class TestTransition(unittest.TestCase):
     def test_transition_1(self):
         model = helpers.create_small_universe(n_agents=5, visibility_multiplier=0.5)
 
@@ -123,6 +124,8 @@ class TestIPOMDP(unittest.TestCase):
 
         self.assertTrue((skipped_state == correct_state).all())
 
+
+class TestInitialBelief(unittest.TestCase):
     def test_initial_belief(self):
         model = helpers.create_small_universe(
             n_agents=5,
@@ -164,6 +167,169 @@ class TestIPOMDP(unittest.TestCase):
         correct_state = agent.get_state()
         belief_agent_state = init_belief[:, 0, :]
         self.assertTrue((correct_state == belief_agent_state).all())
+
+
+class TestObservationProbability(unittest.TestCase):
+    def test_observation_probability_1(self):
+        mdl = helpers.create_small_universe(
+            n_agents=2,
+        )
+
+        ag0, ag1 = mdl.agents
+
+        states = np.array(
+            [
+                [
+                    [10, 1.0, 0.5, 5],  # agent 0 is strong
+                    [0, 1.0, 0.5, 5],  # agent 1 is weak
+                ],
+                [
+                    [20, 1.0, 0.5, 5],  # agent 0 is strong
+                    [0, 1.0, 0.5, 10],  # agent 1 is weak
+                ],
+            ]
+        )
+        actions = ({ag0: action.NO_ACTION}, {ag0: action.NO_ACTION})
+
+        # array of size (n_states, n_agents)
+        tech_levels = growth.tech_level(state=states, model=mdl)
+
+        ### check observation weights of agent 0
+        ag0_obs = (0.9, -0.1, None, None)
+        ag0_exp_obs_1 = (
+            tech_levels[0, 0],
+            tech_levels[0, 1] * states[0, 1, 1],
+            None,
+            None,
+        )
+        ag0_exp_obs_2 = (
+            tech_levels[1, 0],
+            tech_levels[1, 1] * states[1, 1, 1],
+            None,
+            None,
+        )
+
+        weights = ipomdp.prob_observation(
+            observation=ag0_obs, states=states, actions=actions, observer=ag0, model=mdl
+        )
+
+        correct_weights = np.array(
+            [
+                norm.pdf(x=ag0_obs[0], loc=ag0_exp_obs_1[0], scale=mdl.obs_noise_sd)
+                * norm.pdf(x=ag0_obs[1], loc=ag0_exp_obs_1[1], scale=mdl.obs_noise_sd),
+                norm.pdf(x=ag0_obs[0], loc=ag0_exp_obs_2[0], scale=mdl.obs_noise_sd)
+                * norm.pdf(x=ag0_obs[1], loc=ag0_exp_obs_2[1], scale=mdl.obs_noise_sd),
+            ]
+        )
+
+        self.assertTrue(np.allclose(weights, correct_weights))
+
+        ### check observation weights of agent 0
+        ag1_obs = (0.6, -0.1, None, None)
+        ag1_exp_obs_1 = (
+            ag1_obs[0],
+            tech_levels[0, 1],
+            None,
+            None,
+        )
+        ag1_exp_obs_2 = (
+            ag1_obs[0],
+            tech_levels[1, 1],
+            None,
+            None,
+        )
+
+        weights = ipomdp.prob_observation(
+            observation=ag1_obs, states=states, actions=actions, observer=ag1, model=mdl
+        )
+
+        correct_weights = np.array(
+            [
+                norm.pdf(x=ag1_obs[0], loc=ag1_exp_obs_1[0], scale=mdl.obs_noise_sd)
+                * norm.pdf(x=ag1_obs[1], loc=ag1_exp_obs_1[1], scale=mdl.obs_noise_sd),
+                norm.pdf(x=ag1_obs[0], loc=ag1_exp_obs_2[0], scale=mdl.obs_noise_sd)
+                * norm.pdf(x=ag1_obs[1], loc=ag1_exp_obs_2[1], scale=mdl.obs_noise_sd),
+            ]
+        )
+
+        self.assertTrue(np.allclose(weights, correct_weights))
+
+    def test_observation_probability_2(self):
+        mdl = helpers.create_small_universe(
+            n_agents=2,
+        )
+
+        ag0, ag1 = mdl.agents
+
+        states = np.array(
+            [
+                [
+                    [20, 1.0, 0.5, 5],  # agent 0 is strong
+                    [0, 1.0, 0.5, 5],  # agent 1 is weak (just destroyed)
+                ],
+                [
+                    [20, 1.0, 0.5, 5],  # agent 0 is strong
+                    [19, 1.0, 0.5, 5],  # agent 1 is strong, but not as strong as 0
+                ],
+            ]
+        )
+        actions = ({ag0: ag1}, {ag1: ag0})
+
+        ### test observations of agent 0
+
+        observation1_ag0 = (0.9, 0.0, True, None)
+        weights = ipomdp.prob_observation(
+            observation=observation1_ag0,
+            states=states,
+            actions=actions,
+            observer=ag0,
+            model=mdl,
+        )
+
+        self.assertGreater(weights[0], 0)  # agent 0 can reach 1 and is stronger
+        self.assertEqual(weights[1], 0)  # agent 0 did not attack
+
+        observation2_ag0 = (0.9, 0.0, None, False)
+        weights = ipomdp.prob_observation(
+            observation=observation2_ag0,
+            states=states,
+            actions=actions,
+            observer=ag0,
+            model=mdl,
+        )
+
+        self.assertEqual(
+            weights[0], 0
+        )  # agent 1 is not strong enough to cause a failed attack
+        self.assertGreater(weights[1], 0)  # agent 1 is strong enough to attack
+
+        ### test observations of agent 1
+
+        observation1_ag1 = (0.9, 0.0, None, True)
+        weights = ipomdp.prob_observation(
+            observation=observation1_ag1,
+            states=states,
+            actions=actions,
+            observer=ag1,
+            model=mdl,
+        )
+
+        self.assertGreater(weights[0], 0)  # agent 0 can reach 1 and is stronger
+        self.assertEqual(weights[1], 0)  # agent 0 was not attacked
+
+        observation2_ag1 = (0.9, 0.0, False, None)
+        weights = ipomdp.prob_observation(
+            observation=observation2_ag1,
+            states=states,
+            actions=actions,
+            observer=ag1,
+            model=mdl,
+        )
+
+        self.assertEqual(
+            weights[0], 0
+        )  # agent 1 is not strong enough to cause a failed attack
+        self.assertGreater(weights[1], 0)  # agent 1 is strong enough to attack
 
 
 if __name__ == "__main__":
