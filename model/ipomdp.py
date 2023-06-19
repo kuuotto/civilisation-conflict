@@ -346,32 +346,32 @@ def sample_observation(
     model: universe.Universe,
 ) -> ipomdp_solver.Observation:
     """
-    Returns a single possible observation of “agent” when the system is
-    currently in state “state” and the previous action was “action”.
-    Observations include technosignatures from all civilisations (n_agents
-    values, where agent's own value is its technology level) and two success
-    bits, the first indicating whether the agent successfully attacked someone
-    last round or not and the second indicating whether the agent itself was
+    Returns a single possible observation of “agent” when the system is \
+    currently in state “state” and the previous action was “action”. \
+    Observations include technosignatures from all civilisations (n_agents \
+    values, where agent's own value is its technology level) and two success \
+    bits, the first indicating whether the agent successfully attacked someone \
+    last round or not and the second indicating whether the agent itself was \
     successfully destroyed last round or not.
 
     Model's random number generator (rng attribute) is used for sampling.
 
-    Technosignature observations from each agent are assumed to have Gaussian
+    Technosignature observations from each agent are assumed to have Gaussian \
     observation noise, which is saved in the model's obs_noise_sd attribute.
 
     Keyword arguments:
     state: the current model state
     action: the previous action
     agent: the observing Civilisation
-    model: a Universe. Used for determining distances between civilisations and
+    model: a Universe. Used for determining distances between civilisations and \
            for random sampling.
 
     Returns:
-    The observation. A NumPy array of size n_agents + 2.
+    The observation. A tuple of length n_agents + 2. 
     The n_agents values correspond to technosignatures of civilisations and the
     final two bits are success bits as described above.
-    The first success bit is np.nan if the agent did not attack.
-    The second success bit is np.nan if the agent was not attacked.
+    The first success bit is None if the agent did not attack.
+    The second success bit is None if the agent was not attacked.
     """
 
     ### determine success bits
@@ -388,7 +388,7 @@ def sample_observation(
         agent_capable = model.is_neighbour(
             agent1=agent, agent2=target, tech_level=prev_agent_tech_level
         )
-        agent_attacked = agent_capable
+        agent_attacked = agent_attacked and agent_capable
 
     agent_targeted = agent in action.values()
 
@@ -437,6 +437,8 @@ def sample_observation(
         for ag, t, ts in zip(model.agents, tech_levels, technosignatures)
     )
 
+    # add tech levels of agents to observation to help with debugging. Note that
+    # these values are ignored when calculating probabilities of observations.
     observation += tuple(orig_tech_levels)
 
     # add result bits

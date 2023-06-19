@@ -332,5 +332,229 @@ class TestObservationProbability(unittest.TestCase):
         self.assertGreater(weights[1], 0)  # agent 1 is strong enough to attack
 
 
+class TestObservationSample(unittest.TestCase):
+    def test_observation_sample_success_bits(self):
+        mdl = helpers.create_small_universe(
+            n_agents=2,
+            visibility_multiplier=0.5,
+        )
+
+        strong, weak = mdl.agents
+
+        # agent 0 is strong, agent 1 is weak
+        propagated_states = np.array(
+            [
+                [
+                    [11, 1.0, 0.5, 5],
+                    [0, 1.0, 0.5, 5],
+                ],
+                [
+                    [11, 1.0, 0.5, 5],
+                    [2, 1.0, 0.5, 5],
+                ],
+                [
+                    [11, 0.5, 0.5, 5],
+                    [2, 1.0, 0.5, 5],
+                ],
+                [
+                    [11, 1.0, 0.5, 5],
+                    [2, 1.0, 0.5, 5],
+                ],
+                [
+                    [11, 1.0, 0.5, 5],
+                    [2, 1.0, 0.5, 5],
+                ],
+                [
+                    [11, 1.0, 0.5, 5],
+                    [2, 0.5, 0.5, 5],
+                ],
+                [
+                    [12, 1.0, 0.5, 5],
+                    [11, 1.0, 0.5, 5],  # here agent 1 can reach 0 but is still weaker
+                ],
+            ]
+        )
+        prev_actions = (
+            {strong: weak},
+            {strong: action.NO_ACTION},
+            {strong: action.HIDE},
+            {weak: strong},
+            {weak: action.NO_ACTION},
+            {weak: action.HIDE},
+            {weak: strong},
+        )
+
+        print(mdl._distances_tech_level)
+        print(growth.tech_level(propagated_states, mdl))
+
+        ### strong attacks weak
+        # observation of strong
+        obs = ipomdp.sample_observation(
+            state=propagated_states[0],
+            action=prev_actions[0],
+            agent=strong,
+            model=mdl,
+        )
+
+        self.assertEqual(obs[-2], True)
+        self.assertEqual(obs[-1], None)
+
+        # observation of weak
+        obs = ipomdp.sample_observation(
+            state=propagated_states[0],
+            action=prev_actions[0],
+            agent=weak,
+            model=mdl,
+        )
+
+        self.assertEqual(obs[-2], None)
+        self.assertEqual(obs[-1], True)
+
+        ### strong does nothing
+        # observation of strong
+        obs = ipomdp.sample_observation(
+            state=propagated_states[1],
+            action=prev_actions[1],
+            agent=strong,
+            model=mdl,
+        )
+
+        self.assertEqual(obs[-2], None)
+        self.assertEqual(obs[-1], None)
+
+        # observation of weak
+        obs = ipomdp.sample_observation(
+            state=propagated_states[1],
+            action=prev_actions[1],
+            agent=weak,
+            model=mdl,
+        )
+
+        self.assertEqual(obs[-2], None)
+        self.assertEqual(obs[-1], None)
+
+        ### strong hides
+        # observation of strong
+        obs = ipomdp.sample_observation(
+            state=propagated_states[2],
+            action=prev_actions[2],
+            agent=strong,
+            model=mdl,
+        )
+
+        self.assertEqual(obs[-2], None)
+        self.assertEqual(obs[-1], None)
+
+        # observation of weak
+        obs = ipomdp.sample_observation(
+            state=propagated_states[2],
+            action=prev_actions[2],
+            agent=weak,
+            model=mdl,
+        )
+
+        self.assertEqual(obs[-2], None)
+        self.assertEqual(obs[-1], None)
+
+        ### weak attacks
+        # observation of strong
+        obs = ipomdp.sample_observation(
+            state=propagated_states[3],
+            action=prev_actions[3],
+            agent=strong,
+            model=mdl,
+        )
+
+        self.assertEqual(obs[-2], None)
+        self.assertEqual(obs[-1], None)
+
+        # observation of weak
+        obs = ipomdp.sample_observation(
+            state=propagated_states[3],
+            action=prev_actions[3],
+            agent=weak,
+            model=mdl,
+        )
+
+        self.assertEqual(obs[-2], None)
+        self.assertEqual(obs[-1], None)
+
+        ### weak does nothing
+        # observation of strong
+        obs = ipomdp.sample_observation(
+            state=propagated_states[4],
+            action=prev_actions[4],
+            agent=strong,
+            model=mdl,
+        )
+
+        self.assertEqual(obs[-2], None)
+        self.assertEqual(obs[-1], None)
+
+        # observation of weak
+        obs = ipomdp.sample_observation(
+            state=propagated_states[4],
+            action=prev_actions[4],
+            agent=weak,
+            model=mdl,
+        )
+
+        self.assertEqual(obs[-2], None)
+        self.assertEqual(obs[-1], None)
+
+        ### weak hides
+        # observation of strong
+        obs = ipomdp.sample_observation(
+            state=propagated_states[5],
+            action=prev_actions[5],
+            agent=strong,
+            model=mdl,
+        )
+
+        self.assertEqual(obs[-2], None)
+        self.assertEqual(obs[-1], None)
+
+        # observation of weak
+        obs = ipomdp.sample_observation(
+            state=propagated_states[5],
+            action=prev_actions[5],
+            agent=weak,
+            model=mdl,
+        )
+
+        self.assertEqual(obs[-2], None)
+        self.assertEqual(obs[-1], None)
+
+        ### weak (who can reach strong) attacks
+        # first check that the weaker agent was able to reach the stronger agent in
+        # the previous timestep
+        prev_state = propagated_states[6].copy()
+        prev_state[:, 0] -= 1
+        prev_weak_tech_level = growth.tech_level(state=prev_state, model=mdl)[1]
+        self.assertGreater(prev_weak_tech_level, mdl._distances_tech_level[0, 1])
+
+        # observation of strong
+        obs = ipomdp.sample_observation(
+            state=propagated_states[6],
+            action=prev_actions[6],
+            agent=strong,
+            model=mdl,
+        )
+
+        self.assertEqual(obs[-2], None)
+        self.assertEqual(obs[-1], False)
+
+        # observation of weak
+        obs = ipomdp.sample_observation(
+            state=propagated_states[6],
+            action=prev_actions[6],
+            agent=weak,
+            model=mdl,
+        )
+
+        self.assertEqual(obs[-2], False)
+        self.assertEqual(obs[-1], None)
+
+
 if __name__ == "__main__":
     unittest.main()
