@@ -399,3 +399,61 @@ def plot_particles(particles: List[ipomdp_solver.Particle], model: universe.Univ
     fig.suptitle("Particle states")
 
     plt.show()
+
+
+def plot_particles_n2(particles: List[ipomdp_solver.Particle], model: universe.Universe):
+    """
+    Plots the particles in the list. This creates n_agents subplots, each depicting the
+    state of the corresponding agent. The horizontal axes show the age of the
+    civilisations and the vertical axis corresponds to the visibility factor.
+
+    If particles have weights, they are visually represented by the size of the points.
+
+    If the model uses sigmoid growth for agents, the horizontal axis corresponds to
+    time until takeoff (takeoff_time - age) as this is what determines technology
+    levels.
+    """
+
+    n_agents = particles[0].state.shape[0]
+
+    assert n_agents == 2
+
+    fig, ax = plt.subplots(constrained_layout=True, figsize=(4, 4))
+
+    states = np.stack(tuple(p.state for p in particles), axis=0)
+    weights = tuple(p.weight for p in particles)
+
+    show_weights = sum(p.weight is None for p in particles) == 0
+
+    tech_levels = growth.tech_level(state=states, model=model)
+    x_vals = tech_levels[:, 0]
+    y_vals = tech_levels[:, 1]
+
+    if show_weights:
+        min_size, max_size = 1, 40
+        if max(weights) == 0:
+            point_sizes = (min_size,) * len(particles)
+        else:
+            point_sizes = tuple(
+                min_size + (max_size - min_size) / max(weights) * w for w in weights
+            )
+        ax.scatter(
+            x=x_vals,
+            y=y_vals,
+            s=point_sizes,
+            c=tuple(
+                "red" if w == 0 else ("blue" if w > 1e-6 else "green")
+                for w in weights
+            ),
+        )
+    else:
+        ax.scatter(x=x_vals, y=y_vals)
+
+    ax.set_xlim(0 - 0.02, 1 + 0.02)
+    ax.set_ylim(0 - 0.02, 1 + 0.02)
+    ax.set_title(f"Particle states")
+    ax.set_xlabel("Technology level of agent 0")
+    ax.set_ylabel("Technology level of agent 1")
+    ax.grid()
+
+    plt.show()
