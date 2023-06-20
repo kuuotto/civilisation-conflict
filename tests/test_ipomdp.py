@@ -556,5 +556,114 @@ class TestObservationSample(unittest.TestCase):
         self.assertEqual(obs[-1], None)
 
 
+class TestReward(unittest.TestCase):
+    def test_reward(self):
+        mdl = helpers.create_small_universe(
+            n_agents=2,
+            rewards={"destroyed": -1, "hide": -0.01, "attack": -0.1},
+            agent_growth=growth.sigmoid_growth,
+        )
+
+        strong, weak = mdl.agents
+
+        self.assertEqual(strong.id, 0)
+        self.assertEqual(weak.id, 1)
+
+        states = np.array(
+            [
+                [
+                    [11, 1.0, 0.5, 5],
+                    [0, 1.0, 0.5, 5],
+                ],
+                [
+                    [11, 1.0, 0.5, 5],
+                    [10, 1.0, 0.5, 5],
+                ],
+            ]
+        )
+
+        ### strong attacks weak
+        # check strong's reward
+        reward = ipomdp.reward(
+            state=states[0],
+            action_={strong: weak},
+            agent=strong,
+            model=mdl,
+        )
+        self.assertEqual(reward, -0.1)
+
+        # check weak's reward
+        reward = ipomdp.reward(
+            state=states[0],
+            action_={strong: weak},
+            agent=weak,
+            model=mdl,
+        )
+        self.assertEqual(reward, -1)
+
+        ### weak attacks strong (weak cannot reach strong)
+        # check strong's reward
+        reward = ipomdp.reward(
+            state=states[0],
+            action_={weak: strong},
+            agent=strong,
+            model=mdl,
+        )
+        self.assertEqual(reward, 0)
+
+        # check weak's reward
+        reward = ipomdp.reward(
+            state=states[0],
+            action_={weak: strong},
+            agent=weak,
+            model=mdl,
+        )
+        self.assertEqual(reward, 0)
+
+        ### weak attacks strong (weak can reach strong)
+
+        # check that in the second state weak can in fact reach strong
+        weak_tech_level = growth.tech_level(state=states[1], model=mdl)[weak.id]
+        self.assertGreater(
+            weak_tech_level, mdl._distances_tech_level[weak.id, strong.id]
+        )
+
+        # check strong's reward
+        reward = ipomdp.reward(
+            state=states[1],
+            action_={weak: strong},
+            agent=strong,
+            model=mdl,
+        )
+        self.assertEqual(reward, 0)
+
+        # check weak's reward
+        reward = ipomdp.reward(
+            state=states[1],
+            action_={weak: strong},
+            agent=weak,
+            model=mdl,
+        )
+        self.assertEqual(reward, -0.1)
+
+        ### strong hides
+        reward = ipomdp.reward(
+            state=states[0],
+            action_={strong: action.HIDE},
+            agent=strong,
+            model=mdl,
+        )
+        self.assertEqual(reward, -0.01)
+
+        ### strong skips
+        reward = ipomdp.reward(
+            state=states[0],
+            action_={strong: action.NO_ACTION},
+            agent=strong,
+            model=mdl,
+        )
+        self.assertEqual(reward, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
