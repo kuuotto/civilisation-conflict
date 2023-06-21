@@ -3,6 +3,9 @@ import unittest
 import numpy as np
 from model import growth, ipomdp_solver, action
 from tests import helpers
+from collections import Counter
+import random
+import math
 
 
 class TestSolverForestStructure(unittest.TestCase):
@@ -192,3 +195,64 @@ class TestParticleReinvigoration(unittest.TestCase):
         # variance between particles
         variance = all_states.var(axis=0)
         self.assertTrue((variance > 0).all())
+
+
+class TestResampling(unittest.TestCase):
+    def test_systematic_resampling_1(self):
+        rng = random.Random(0)
+        sample = [0, 1, 2, 3, 4, 5]
+        weights = (0.0999, 0.0001, 0.2, 0.4, 0.2, 0.1)
+        N = len(sample)
+
+        # repeat resampling multiple times
+        for _ in range(100):
+            resample, counts = ipomdp_solver.systematic_resample(
+                sample=sample,
+                weights=weights,
+                rng=rng,
+            )
+
+            # check that the resample and counts match
+            correct_counts = Counter(resample)
+            for val, count in zip(sample, counts):
+                self.assertEqual(count, correct_counts[val])
+
+            # check that each value was sampled between floor(Nw) and floor(NW) + 1 times
+            for weight, count in zip(weights, counts):
+                lower_bound = math.floor(N * weight)
+                upper_bound = math.floor(N * weight) + 1
+
+                self.assertGreaterEqual(count, lower_bound)
+                self.assertLessEqual(count, upper_bound)
+
+    def test_systematic_resampling_2(self):
+        rng = random.Random(0)
+        N = 10
+        sample = list(range(N))
+
+        # repeat resampling multiple times
+        for _ in range(100):
+            # generate random weights
+            weights = tuple(rng.random() for _ in range(N))
+            weight_sum = sum(weights)
+            weights = tuple(w / weight_sum for w in weights)
+
+            # resample
+            resample, counts = ipomdp_solver.systematic_resample(
+                sample=sample,
+                weights=weights,
+                rng=rng,
+            )
+
+            # check that the resample and counts match
+            correct_counts = Counter(resample)
+            for val, count in zip(sample, counts):
+                self.assertEqual(count, correct_counts[val])
+
+            # check that each value was sampled between floor(Nw) and floor(NW) + 1 times
+            for weight, count in zip(weights, counts):
+                lower_bound = math.floor(N * weight)
+                upper_bound = math.floor(N * weight) + 1
+
+                self.assertGreaterEqual(count, lower_bound)
+                self.assertLessEqual(count, upper_bound)
