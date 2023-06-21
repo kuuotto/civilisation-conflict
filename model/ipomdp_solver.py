@@ -966,6 +966,13 @@ class Tree:
             previous_particle=particle,
         )
 
+        # if particle has already been propagated with this action, add some noise to
+        # the state of next_particle
+        if (actor == self.agent and particle.n_expansions_act[agent_action] > 0) or (
+            actor != self.agent and action_ in particle.propagated_actions
+        ):
+            next_particle.add_noise()
+
         ### 4. Update the belief in the current tree
         # if the action is unvisited, creating weights is not necessary as we perform
         # a rollout from it on the next recursion
@@ -1022,7 +1029,7 @@ class Tree:
                     assert len(next_lower_node.particles) > 0
                 except Exception:
                     # there is no node, so we cannot create beliefs
-                    print("Could not create belief in child tree (it doesn't exist)")
+                    print("Could not create belief in child tree (node doesn't exist)")
                     continue
 
                 # assign weights to particles
@@ -1039,8 +1046,7 @@ class Tree:
 
         # save value and next agent action to particle
         value = agent_action_value + model.discount_factor * future_value
-        if agent_action != action.NO_TURN:
-            particle.add_expansion(agent_action=agent_action, value=value)
+        particle.add_expansion(action=action_, value=value)
 
         # add particle to node
         # (except if this is the particle where we started simulating)
@@ -1470,6 +1476,10 @@ class Particle:
         self.n_expansions_act = {act: 0 for act in possible_actions}
         self.act_value = {act: 0 for act in possible_actions}
 
+        # this keeps track of others' actions that have been used to propagate
+        # this particle
+        self.propagated_actions: List[Action] = []
+
     def agent_action_history(
         self, agent: civilisation.Civilisation
     ) -> AgentActionHistory:
@@ -1479,14 +1489,24 @@ class Particle:
         """
         return joint_to_agent_action_history(self.joint_action_history, agent=agent)
 
-    def add_expansion(self, agent_action: AgentAction, value: float) -> None:
+    def add_expansion(self, action: Action, value: float) -> None:
         """
         Add information about an expansion performed starting from the particle.
 
         Keyword arguments:
-        agent_action: first action taken by agent in the expansion
+        action: action used to propagate the particle
         value: value received for taking this action and continuing optimally afterwards
         """
+        # if someone else acted, we only store the action
+        agent = self.node.tree.agent
+
+        if agent not in action:
+            if action not in self.propagated_actions:
+                self.propagated_actions.append(action)
+
+            return
+
+        agent_action = action[agent]
         assert agent_action in self.n_expansions_act
 
         prev_n_expansions = self.n_expansions_act[agent_action]
@@ -1499,6 +1519,34 @@ class Particle:
         self.n_expansions += 1
         self.n_expansions_act[agent_action] += 1
         self.act_value[agent_action] = new_value
+
+    def add_noise(self):
+        model = self.node.tree.forest.owner.model
+
+        # add noise to growth parameters (TODO: add noise as a model parameter)
+        if model.agent_growth == growth.sigmoid_growth:
+            speed_range = model.agent_growth_params["speed_range"]
+            takeoff_time_range = model.agent_growth_params["takeoff_time_range"]
+
+            speed_noise_scale = 0.03
+            takeoff_time_noise_scale = 3
+
+            if speed_range[0] < speed_range[1]:
+                self.state[:, 2] += model.rng.normal(
+                    loc=0, scale=speed_noise_scale, size=model.n_agents
+                )
+                self.state[:, 2] = self.state[:, 2].clip(*speed_range)
+
+            if takeoff_time_range[0] < takeoff_time_range[1]:
+                self.state[:, 3] += model.rng.integers(
+                    low=-takeoff_time_noise_scale,
+                    high=takeoff_time_noise_scale,
+                    endpoint=True,
+                    size=model.n_agents,
+                )
+                self.state[:, 3] = self.state[:, 3].clip(*takeoff_time_range)
+        else:
+            raise NotImplementedError()
 
     def ancestor_particle(self):
         """

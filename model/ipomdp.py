@@ -100,21 +100,6 @@ def transition(
     # always tick everyone's time by one
     state[:, 0] += 1
 
-    # add noise to growth parameters (TODO: add noise as a model parameter)
-    # if model.agent_growth == growth.sigmoid_growth:
-    #     speed_range = model.agent_growth_params["speed_range"]
-    #     takeoff_time_range = model.agent_growth_params["takeoff_time_range"]
-
-    #     if speed_range[0] < speed_range[1]:
-    #         state[:, 2] += model.rng.normal(loc=0, scale=0.03, size=model.n_agents)
-    #         state[:, 2] = state[:, 2].clip(*speed_range)
-
-    #     if takeoff_time_range[0] < takeoff_time_range[1]:
-    #         state[:, 3] += model.rng.integers(
-    #             low=-3, high=3, endpoint=True, size=model.n_agents
-    #         )
-    #         state[:, 3] = state[:, 3].clip(*takeoff_time_range)
-
     return state
 
 
