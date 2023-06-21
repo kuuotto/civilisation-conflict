@@ -391,7 +391,7 @@ class BeliefForest:
 
         # check that the weights do not sum to 0
         if len(self.top_level_tree_root_node.belief) == 0:
-            print(
+            raise Exception(
                 "The weights of the particles in the top-level tree root node are all 0"
             )
 
@@ -419,6 +419,10 @@ class BeliefForest:
         Initialise the weights in the immediate child trees of the tree particle \
         is in using the weights stored in particle (or its oldest ancestor in \
         case it itself is not in a root node).
+
+        Keyword arguments:
+        particle: The particle to use as a base for weighting the particles in the \
+                  lower tree.
         """
         particle_tree = particle.node.tree
         model = self.owner.model
@@ -1041,7 +1045,7 @@ class Tree:
             for node in self.root_nodes
             for child_node in node.child_nodes.values()
         )
-        self.root_nodes = []
+        self.root_nodes: List[Node] = []
 
         ### 2. Prune new root nodes that are no longer needed (will never be expanded
         ###    because the agent action histories they represent are no longer present
@@ -1083,7 +1087,7 @@ class Tree:
             self.root_nodes.append(root_node)
 
         if len(self.root_nodes) == 0:
-            print("No root nodes left")
+            raise Exception("No root nodes left")
 
         print(
             f"{self.signature}:",
@@ -1234,7 +1238,7 @@ class Node:
 
         # relation of node to other nodes in the tree
         self.parent_node = parent_node
-        self.child_nodes = dict()
+        self.child_nodes: Dict[AgentAction, Node] = dict()
 
         # particles is a list of all particles stored in the node
         self.particles = []
@@ -1366,6 +1370,17 @@ class Node:
 
         for other_agent in other_agents:
             for particle in self.particles:
+                # find particles in the lower tree to assign weights to
+                try:
+                    lower_node = forest.get_matching_lower_node(
+                        particle=particle, agent=other_agent
+                    )
+                except Exception:
+                    # couldn't find the corresponding node. This should never happen
+                    raise Exception(
+                        f"Couldn't find a lower level node based on particle {particle.joint_action_history} in tree {self.tree.signature}"
+                    )
+
                 # simulate an observation for the other agent given this particle
                 other_agent_obs = ipomdp.sample_observation(
                     state=particle.state,
@@ -1374,33 +1389,11 @@ class Node:
                     model=model,
                 )
 
-                # find particles in the lower tree to assign weights to
-                try:
-                    lower_node = forest.get_matching_lower_node(
-                        particle=particle, agent=other_agent
-                    )
-                except Exception:
-                    # couldn't find the corresponding node. This is worrying, but let's
-                    # try to keep going
-                    print(
-                        f"Couldn't find a lower level node based on particle {particle.joint_action_history} in tree {self.tree.signature}"
-                    )
-                    continue
+                # weight the particles in the parent node of lower_node
+                forest.initialise_simulation(particle=particle)
 
-                # TODO: need to resample here
-
-                # find prior weights
-                prior_weights = {
-                    p: w
-                    for p, w in zip(
-                        lower_node.parent_node.particles,
-                        particle.previous_particle.lower_particle_dist[other_agent],
-                        strict=True,
-                    )
-                }
-                prior_weights = tuple(
-                    prior_weights[p.previous_particle] for p in lower_node.particles
-                )
+                # resample particles in the parent node of lower_node
+                lower_node.parent_node.resample_particles()
 
                 # update
                 posterior_weights = weight_particles(
@@ -1408,80 +1401,10 @@ class Node:
                     observation=other_agent_obs,
                     agent=other_agent,
                     model=model,
-                    prior_weights=prior_weights,
                 )
 
                 # save
                 particle.lower_particle_dist[other_agent] = posterior_weights
-
-    # def generate_reinvigorated_particles(self) -> List[Particle]:
-    #     """
-    #     Returns reinvigorated particles in proportion to the weight of the
-    #     root node. These particles are not yet weighted.
-
-    #     A single new particle is created by sampling a particle from the
-    #     node's parent root node belief without weights (so low probability
-    #     particles get more presentation), sampling an action from another agent
-    #     if necessary and propagating that particle with the action.
-    #     """
-    #     model = self.tree.forest.owner.model
-    #     agent = self.tree.agent
-
-    #     n_samples = round(self.root_node_weight * model.n_reinvigoration_particles)
-
-    #     # always create at least a given number of particles
-    #     n_samples = max(n_samples, 5)
-
-    #     if n_samples == 0:
-    #         return []
-
-    #     # sample initial particles without weights
-    #     particles = model.random.choices(
-    #         tuple(p for p in self.parent_node.belief if p.weight > 0), k=n_samples
-    #     )
-
-    #     # last action performed by tree agent
-    #     last_agent_action = self.agent_action_history[-1]
-
-    #     # if the tree agent did not have a turn, choose one other agent to
-    #     # act and choose their action based on the level 0 default policy
-    #     if last_agent_action == action.NO_TURN:
-    #         # choose an actor
-    #         possible_actors = [*model.agents]
-    #         possible_actors.remove(agent)
-    #         actors = model.random.choices(possible_actors, k=n_samples)
-
-    #         # choose an action
-    #         actor_actions = tuple(
-    #             model.random.choice(actor.possible_actions()) for actor in actors
-    #         )
-    #         actions = (
-    #             {actor: actor_action}
-    #             for actor, actor_action in zip(actors, actor_actions)
-    #         )
-
-    #     else:
-    #         actions = ({agent: last_agent_action} for _ in range(n_samples))
-
-    #     new_particles = []
-
-    #     for particle, action_ in zip(particles, actions):
-    #         # create new particle
-    #         new_state = ipomdp.transition(
-    #             state=particle.state, action_=action_, model=model
-    #         )
-    #         new_joint_action_history = particle.joint_action_history + (action_,)
-    #         new_particle = Particle(
-    #             state=new_state,
-    #             joint_action_history=new_joint_action_history,
-    #             node=self,
-    #             previous_particle=particle,
-    #         )
-
-    #         # add to list
-    #         new_particles.append(new_particle)
-
-    #     return new_particles
 
 
 class Particle:
