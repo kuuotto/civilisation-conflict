@@ -12,6 +12,7 @@ import math
 if TYPE_CHECKING:
     # avoid circular imports with type hints
     from model import civilisation, universe
+    import random
 
     AgentAction = Union[
         action.NO_TURN, action.NO_ACTION, action.HIDE, civilisation.Civilisation
@@ -42,20 +43,34 @@ def joint_to_agent_action_history(
 
 
 def systematic_resample(
-    sample: List, weights: Tuple, size: int, rng, return_counts: bool = False
-) -> List:
+    sample: List,
+    weights: Tuple,
+    rng: random.Random,
+    size: int = None,
+) -> Tuple[List, List]:
     """
     Performs a systematic resampling of the elements in the list using the weights.
 
     Inspired by code in the filterPy library.
+
+    Keyword arguments:
+    sample: sample to resample
+    weights: weights of elements in sample
+    rng: random number generator
+    size: desired resample size. If not supplied, resample will be same size as sample
+
+    Returns:
+    the new sample and counts for each element in sample
     """
-    if return_counts:
-        counts = [0] * len(sample)
-    else:
-        resample = []
+    counts = [0] * len(sample)
+    resample = []
+
+    if size is None:
+        size = len(sample)
 
     # calculate cumulative weights
     cum_weights = np.cumsum(weights)
+    cum_weights[-1] = 1  # make sure last weight is 1
 
     # sample random number
     r = rng.random()
@@ -69,17 +84,15 @@ def systematic_resample(
     while point_i < size:
         if points[point_i] < cum_weights[element_i]:
             # add element to sample
-            if return_counts:
-                counts[element_i] += 1
-            else:
-                resample.append(sample[element_i])
+            resample.append(sample[element_i])
+            counts[element_i] += 1
 
             point_i += 1
         else:
             # move on to next element
             element_i += 1
 
-    return counts if return_counts else resample
+    return resample, counts
 
 
 def bin_resample(
@@ -121,8 +134,7 @@ def bin_resample(
         weights=tuple(bin_weights.values()),
         size=size,
         rng=model.random,
-        return_counts=True,
-    )
+    )[1]
 
     # sample the sampled number from within each bin
     for bin, bin_count in zip(bins, bin_counts):
@@ -145,7 +157,7 @@ def bin_resample(
             weights=bin_particle_weights,
             size=bin_count,
             rng=model.random,
-        )
+        )[0]
 
         resample.extend(bin_sample)
 
@@ -298,11 +310,12 @@ class BeliefForest:
         self.owner = owner
 
         # create trees for agents at lower levels
-        self.create_child_trees(
-            parent_tree_level=owner.level,
-            parent_tree_agent=owner,
-            parent_tree_signature=(owner,),
-        )
+        if owner.level > 0:
+            self.create_child_trees(
+                parent_tree_level=owner.level,
+                parent_tree_agent=owner,
+                parent_tree_signature=(owner,),
+            )
 
         # create agent's own tree at the highest level
         self.trees[(owner,)] = Tree(signature=(owner,), forest=self)
@@ -593,12 +606,12 @@ class Tree:
                 current_node = root_node
                 break
         else:
-            raise Exception("Node not found")
+            raise LookupError("Node not found")
 
         # traverse the tree until the desired node is found
         for agent_action in agent_action_history[root_length:]:
             if agent_action not in current_node.child_nodes:
-                raise Exception("Node not found")
+                raise LookupError("Node not found")
 
             current_node = current_node.child_nodes[agent_action]
 
@@ -902,6 +915,9 @@ class Tree:
                 # N = sum(p.n_expansions for p in lower_node.particles if p.weight > 0)
                 # assert N > 20
 
+            except LookupError:
+                print("Could not find a matching node in child tree")
+                actor_action = ipomdp.level0_opponent_policy(agent=actor, model=model)
             except Exception:
                 # TODO
                 if len(lower_node.belief) == 0:
@@ -982,7 +998,7 @@ class Tree:
                     )
                 except Exception:
                     # couldn't find lower node
-                    print("Could not resample node in child tree (it doesn't exist)")
+                    print("Could not resample node in child tree (node doesn't exist)")
                     pass
                 else:
                     lower_node.resample_particles()
@@ -1010,7 +1026,7 @@ class Tree:
                     continue
 
                 # assign weights to particles
-                lower_node.weight_particles(other_agent_obs)
+                next_lower_node.weight_particles(other_agent_obs)
 
         ### 5. Repeat
 
@@ -1346,12 +1362,20 @@ class Node:
         if n_particles == 0:
             return
 
-        self.belief = bin_resample(particles=self.belief, model=model)
+        particle_weights = tuple(p.weight for p in self.belief)
+
+        self.belief, _ = systematic_resample(
+            sample=self.belief,
+            weights=particle_weights,
+            rng=model.random,
+        )
 
         # reset weights of particles
         for particle in self.particles:
-            # TODO: optimise this
-            particle.weight = 1 / n_particles if particle in self.belief else 0
+            particle.weight = 0
+
+        for particle in self.belief:
+            particle.weight = 1 / n_particles
 
     def update_lower_beliefs(self):
         """
