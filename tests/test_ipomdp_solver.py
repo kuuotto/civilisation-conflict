@@ -256,3 +256,35 @@ class TestResampling(unittest.TestCase):
 
                 self.assertGreaterEqual(count, lower_bound)
                 self.assertLessEqual(count, upper_bound)
+
+    def test_belief_resampling(self):
+        mdl = helpers.create_small_universe(
+            n_agents=2,
+            reasoning_level=0,
+        )
+
+        # find root node of agent 0's only tree
+        agent = mdl.agents[0]
+        node = agent.forest.trees[(agent,)].root_nodes[0]
+        n_particles = len(node.particles)
+
+        # assign random weights
+        rng = mdl.rng
+        weights = rng.random(size=n_particles)
+        weights = weights / weights.sum()
+
+        for particle, weight in zip(node.particles, weights, strict=True):
+            particle.weight = weight
+
+        # resample
+        node.resample_particles()
+
+        # make sure that belief has correct length
+        self.assertEqual(len(node.belief), n_particles)
+
+        # make sure that weights of all particles are either 1/n_particles or 0
+        for particle in node.particles:
+            if particle in node.belief:
+                self.assertEqual(particle.weight, 1 / n_particles)
+            else:
+                self.assertEqual(particle.weight, 0)
