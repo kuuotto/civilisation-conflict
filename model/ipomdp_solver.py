@@ -391,10 +391,9 @@ class BeliefForest:
 
         ### 1. update the beliefs in the top-level tree of the owner
 
-        # set correct node as the new root
+        # find the old and new root nodes
         old_root_node = self.top_level_tree_root_node
         new_root_node = old_root_node.child_nodes[owner_action]
-        self.top_level_tree_root_node = new_root_node
 
         # resample the old root node
         old_root_node.resample_particles()
@@ -417,6 +416,9 @@ class BeliefForest:
 
         # remove reference to previous node
         new_root_node.parent_node = None
+
+        # set correct node as the new root
+        self.top_level_tree_root_node = new_root_node
 
         print(
             f"{self.top_level_tree.signature}: ({new_root_node.agent_action_history})",
