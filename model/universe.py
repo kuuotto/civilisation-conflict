@@ -2,7 +2,7 @@ import mesa
 import numpy as np
 
 from model import civilisation, growth, ipomdp
-from typing import Tuple
+from typing import Tuple, List
 
 
 class Universe(mesa.Model):
@@ -118,7 +118,7 @@ class Universe(mesa.Model):
         # keep a list of agents in the model. The schedule also keeps a list,
         # but it is re-generated every time it is accessed which is not very
         # efficient
-        self.agents = []
+        self.agents: List[civilisation.Civilisation] = []
 
         # add agents
         for id in range(n_agents):

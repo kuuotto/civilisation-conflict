@@ -368,7 +368,8 @@ class BeliefForest:
 
             # expand trees
             for tree in trees:
-                print(f"Planning in {tree.signature}")
+                if model.debug:
+                    print(f"Planning in {tree.signature}")
 
                 # n_simulations = model.n_tree_simulations * (
                 #     self.owner.level - level + 1
@@ -857,23 +858,29 @@ class Tree:
         node = particle.node
 
         # don't simulate farther than the discount horizon
-        if model.discount_factor**depth < model.discount_epsilon:
-            print(
-                f"Simulation reached the discount horizon at {node.agent_action_history}"
-            )
-            return 0
+        discount_horizon_reached = (
+            model.discount_factor**depth < model.discount_epsilon
+        )
+        if discount_horizon_reached:
+            if model.debug:
+                print(
+                    f"Simulation reached the discount horizon at {node.agent_action_history}"
+                )
+            do_rollout = True
 
         # if we used an unexpanded action last time,
         # perform a rollout and end recursion
         if do_rollout:
-            print(f"Simulation reached a leaf node at {node.agent_action_history}")
+            if not discount_horizon_reached and model.debug:
+                print(f"Simulation reached a leaf node at {node.agent_action_history}")
 
             # make a copy because rollout changes state in place
             start_state = particle.state.copy()
             value = ipomdp.rollout(state=start_state, agent=self.agent, model=model)
 
             # add the new particle (it will have no expansions)
-            node.particles.append(particle)
+            if not discount_horizon_reached:
+                node.particles.append(particle)
 
             # end recursion
             return value
@@ -918,14 +925,16 @@ class Tree:
                 # assert N > 20
 
             except LookupError:
-                print("Could not find a matching node in child tree")
+                if model.debug:
+                    print("Could not find a matching node in child tree")
                 actor_action = ipomdp.level0_opponent_policy(agent=actor, model=model)
             except Exception:
                 # TODO
-                if len(lower_node.belief) == 0:
-                    print("Belief in lower tree has diverged")
-                else:
-                    print("All actions in lower node have not been expanded")
+                if model.debug:
+                    if len(lower_node.belief) == 0:
+                        print("Belief in lower tree has diverged")
+                    else:
+                        print("All actions in lower node have not been expanded")
                 actor_action = ipomdp.level0_opponent_policy(agent=actor, model=model)
             else:
                 # determine action
@@ -1007,8 +1016,11 @@ class Tree:
                     )
                 except Exception:
                     # couldn't find lower node
-                    print("Could not resample node in child tree (node doesn't exist)")
-                    pass
+                    if model.debug:
+                        print(
+                            "Could not resample node in child tree (node doesn't exist)"
+                        )
+                    continue
                 else:
                     lower_node.resample_particles()
 
@@ -1031,7 +1043,10 @@ class Tree:
                     assert len(next_lower_node.particles) > 0
                 except Exception:
                     # there is no node, so we cannot create beliefs
-                    print("Could not create belief in child tree (node doesn't exist)")
+                    if model.debug:
+                        print(
+                            "Could not create belief in child tree (node doesn't exist)"
+                        )
                     continue
 
                 # assign weights to particles
@@ -1094,7 +1109,8 @@ class Tree:
             # very important in the planning phase. It can also not be used for
             # planning anymore. Therefore we prune it.
             if len(root_node.particles) == 0:
-                print("Pruning root node with no particles (can cause issues!)")
+                if self.forest.owner.model.debug:
+                    print("Pruning root node with no particles (can cause issues!)")
                 continue
 
             # update beliefs about interactive states at the level below
