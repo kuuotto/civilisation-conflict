@@ -928,19 +928,26 @@ class Tree:
                 if model.debug:
                     print("Could not find a matching node in child tree")
                 actor_action = ipomdp.level0_opponent_policy(agent=actor, model=model)
+                model.add_log_event(event_type=11, event_data=self.signature)
+
             except Exception:
                 # TODO
                 if model.debug:
                     if len(lower_node.belief) == 0:
                         print("Belief in lower tree has diverged")
+                        model.add_log_event(event_type=12, event_data=self.signature)
                     else:
                         print("All actions in lower node have not been expanded")
+                        model.add_log_event(event_type=13, event_data=self.signature)
+
                 actor_action = ipomdp.level0_opponent_policy(agent=actor, model=model)
             else:
                 # determine action
                 actor_action, _ = lower_node.tree.tree_policy(
                     node=lower_node, explore=False, softargmax=True
                 )
+
+                model.add_log_event(event_type=10, event_data=self.signature)
 
         # package action
         action_ = {actor: actor_action}

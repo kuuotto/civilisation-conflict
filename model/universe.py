@@ -2,7 +2,7 @@ import mesa
 import numpy as np
 
 from model import civilisation, growth, ipomdp
-from typing import Tuple, List
+from typing import Tuple, List, Any
 
 
 class Universe(mesa.Model):
@@ -29,6 +29,7 @@ class Universe(mesa.Model):
         init_visibility_range,
         toroidal_space=False,
         debug=False,
+        log_events=True,
         seed=0,
     ) -> None:
         """
@@ -79,6 +80,7 @@ class Universe(mesa.Model):
                                Typically (1, 1)
         toroidal_space: whether to use a toroidal universe topology
         debug: whether to print detailed debug information while model is run
+        log_events: whether to keep a log of model events
         seed: seed of the random number generator. Fixing the seed allows \
               for reproducibility of results.
         """
@@ -103,6 +105,7 @@ class Universe(mesa.Model):
         self.init_visibility_belief_range = init_visibility_belief_range
         self.init_visibility_range = init_visibility_range
         self.debug = debug
+        self.log_events = log_events
 
         # initialise random number generator
         self.rng = np.random.default_rng(seed)
@@ -197,10 +200,17 @@ class Universe(mesa.Model):
         # keep track of the last action
         self.previous_action = None
 
+        # initialise a log for events
+        self.log = []
+
     def step(self):
         """Advance the model by one step."""
         self.datacollector.collect(self)
         self.schedule.step()
+
+    def add_log_event(self, event_type: int, event_data: Any) -> None:
+        if self.log_events:
+            self.log.append(LogEvent(event_type=event_type, event_data=event_data))
 
     def _init_state(self):
         """Initialise model state"""
@@ -353,3 +363,12 @@ class SingleActivation(mesa.time.BaseScheduler):
         # increase time
         self.time += 1
         self.steps += 1
+
+
+class LogEvent(object):
+    def __init__(self, event_type: int, event_data: Any):
+        self.event_type = event_type
+        self.event_data = event_data
+
+    def __repr__(self):
+        return f"({self.event_type}, {self.event_data})"
