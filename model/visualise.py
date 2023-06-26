@@ -401,7 +401,9 @@ def plot_particles(particles: List[ipomdp_solver.Particle], model: universe.Univ
     plt.show()
 
 
-def plot_particles_n2(particles: List[ipomdp_solver.Particle], model: universe.Universe):
+def plot_particles_n2(
+    particles: List[ipomdp_solver.Particle], model: universe.Universe
+):
     """
     Plots the particles in the list. This creates n_agents subplots, each depicting the
     state of the corresponding agent. The horizontal axes show the age of the
@@ -442,8 +444,7 @@ def plot_particles_n2(particles: List[ipomdp_solver.Particle], model: universe.U
             y=y_vals,
             s=point_sizes,
             c=tuple(
-                "red" if w == 0 else ("blue" if w > 1e-6 else "green")
-                for w in weights
+                "red" if w == 0 else ("blue" if w > 1e-6 else "green") for w in weights
             ),
         )
     else:
@@ -457,3 +458,179 @@ def plot_particles_n2(particles: List[ipomdp_solver.Particle], model: universe.U
     ax.grid()
 
     plt.show()
+
+
+def plot_tree_particle_counts(
+    tree: ipomdp_solver.Tree,
+    ax: plt.Axes = None,
+    show_individual_counts=True,
+    summary_metrics=["avg", "max"],
+    label: str = "",
+    color=None,
+):
+    """
+    Plot particle counts in the different nodes of the tree.
+    Horizontal axis shows node depth while vertical axis displays the
+    number of particles as
+    i) individual node counts and
+    ii) average at that depth
+    """
+    create_new_axes = ax is None
+    if create_new_axes:
+        fig, ax = plt.subplots(constrained_layout=True)
+
+    # count
+    counts_by_depth = analyse.count_particles_by_depth(tree=tree)
+
+    if show_individual_counts:
+        # represent as x and y
+        x = [depth for depth in counts_by_depth for _ in counts_by_depth[depth]]
+        y = [n for depth in counts_by_depth for n in counts_by_depth[depth]]
+
+        # plot all values
+        sctr = ax.scatter(x=x, y=y, marker="_", color=color)
+
+    if "avg" in summary_metrics:
+        # calculate the average for every depth
+        x_avg = [depth for depth in counts_by_depth]
+        y_avg = [np.mean(counts_by_depth[depth]) for depth in counts_by_depth]
+
+        color = sctr.get_facecolor() if show_individual_counts else color
+        avg_line = ax.plot(x_avg, y_avg, label=f"average ({label})", color=color)
+
+    if "max" in summary_metrics:
+        # calculate the max for every depth
+        x_max = [depth for depth in counts_by_depth]
+        y_max = [np.max(counts_by_depth[depth]) for depth in counts_by_depth]
+
+        color = avg_line[0].get_color() if "avg" in summary_metrics else color
+        ax.plot(
+            x_max, y_max, label=f"maximum ({label})", color=color, linestyle="dashed"
+        )
+
+    ax.set_xlabel("Node depth")
+    ax.set_ylabel("Number of particles")
+    ax.set_title("Numbers of particles in nodes")
+    ax.set_yscale("symlog")
+    ax.grid(visible=True)
+    ax.legend()
+
+    if create_new_axes:
+        plt.show()
+
+
+def plot_tree_fraction_nodes_searched(
+    tree: ipomdp_solver.Tree,
+    ax: plt.Axes = None,
+    label: str = "",
+):
+    """
+    Plot fraction of nodes explored at each depth.
+    Horizontal axis shows node depth while vertical axis displays the fraction.
+    """
+    create_new_axes = ax is None
+    if create_new_axes:
+        fig, ax = plt.subplots(constrained_layout=True)
+
+    # count
+    counts_by_depth = analyse.count_particles_by_depth(tree=tree)
+
+    # number of nodes at each depth
+    depths = [depth for depth in counts_by_depth]
+    n_nodes = [len(counts_by_depth[depth]) for depth in counts_by_depth]
+
+    # fraction of nodes explored
+    n_actions = len(tree.agent.possible_actions())
+    frac_nodes = [n / (n_actions + 1) ** depth for n, depth in zip(n_nodes, depths)]
+
+    # plot
+    ax.plot(depths, frac_nodes, label=label)
+
+    ax.set_xlabel("Node depth")
+    ax.set_ylabel("Fraction of nodes explored")
+    ax.set_title("Fraction of nodes explored")
+    ax.update_datalim([(0, 0)])
+    ax.legend()
+    ax.grid(visible=True)
+
+    if create_new_axes:
+        plt.show()
+
+
+def plot_fraction_successful_lower_tree_queries(
+    model: universe.Universe,
+    ax: plt.Axes = None,
+    label: str = "0",
+    x: int = 0,
+):
+    create_new_axes = ax is None
+    if create_new_axes:
+        fig, ax = plt.subplots(constrained_layout=True)
+
+    # count proportions
+    n_queries = len(
+        [event for event in model.log if event.event_type in (10, 11, 12, 13)]
+    )
+    prop_successful = (
+        len([event for event in model.log if event.event_type == 10]) / n_queries
+    )
+    prop_missing_node = (
+        len([event for event in model.log if event.event_type == 11]) / n_queries
+    )
+    prop_diverged_belief = (
+        len([event for event in model.log if event.event_type == 12]) / n_queries
+    )
+    prop_some_actions_unexpanded = (
+        len([event for event in model.log if event.event_type == 13]) / n_queries
+    )
+
+    bar_width = 0.5
+
+    bar1 = ax.bar(
+        x=x,
+        bottom=0,
+        height=prop_successful,
+        width=bar_width,
+        color="green",
+        label="successful",
+    )
+    bar2 = ax.bar(
+        x=x,
+        bottom=prop_successful,
+        height=prop_some_actions_unexpanded,
+        width=bar_width,
+        color="yellow",
+        label="unexpanded actions",
+    )
+    bar3 = ax.bar(
+        x=x,
+        bottom=prop_successful + prop_some_actions_unexpanded,
+        height=prop_diverged_belief,
+        width=bar_width,
+        color="orange",
+        label="diverged belief",
+    )
+    bar4 = ax.bar(
+        x=x,
+        bottom=prop_successful + prop_some_actions_unexpanded + prop_diverged_belief,
+        height=prop_missing_node,
+        width=bar_width,
+        color="red",
+        label="no node",
+    )
+
+    # set labels
+    if create_new_axes:
+        ticks, labels = [], []
+    else:
+        ticks, labels = ax.get_xticks(), ax.get_xticklabels()
+
+    ticks = list(ticks) + [x]
+    labels += [label]
+    ax.set_xticks(ticks, labels)
+
+    ax.grid(visible=True)
+    ax.legend(handles=[bar1, bar2, bar3, bar4])
+
+    if create_new_axes:
+        plt.show()
