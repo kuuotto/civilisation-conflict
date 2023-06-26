@@ -6,21 +6,21 @@ import pickle
 
 # %% Run model and gather data
 
-# parameter
+# parameters
 params = {
     "n_agents": 2,
     "agent_growth": growth.sigmoid_growth,
     "agent_growth_params": {"speed_range": (0.5, 0.5), "takeoff_time_range": (20, 40)},
     "rewards": {"destroyed": -1, "hide": -0.01, "attack": 0},
-    "n_root_belief_samples": 500,
-    "n_tree_simulations": 500,
+    "n_root_belief_samples": 1000,
+    "n_tree_simulations": 10000,
     "n_reinvigoration_particles": 0,
     "obs_noise_sd": 0.1,
     "reasoning_level": 1,
     "action_dist_0": "random",
-    "discount_factor": 0.8,
+    "discount_factor": 0.7,
     "discount_epsilon": 0.10,
-    "exploration_coef": 1.5,
+    "exploration_coef": 0.5,
     "visibility_multiplier": 0.5,
     "decision_making": "ipomdp",
     "init_age_belief_range": (0, 50),
@@ -31,7 +31,7 @@ params = {
 n_steps = 100
 
 # create a universe
-mdl = universe.Universe(debug=True, seed=0, **params)
+mdl = universe.Universe(debug=1, seed=0, **params)
 # simulate
 for i in tqdm(range(n_steps)):
     mdl.step()

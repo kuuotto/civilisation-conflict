@@ -1,5 +1,6 @@
 import numpy as np
 import math
+from numba import njit
 
 
 def influence_radius(tech_level):
@@ -19,6 +20,7 @@ def inv_influence_radius(inf_radius):
     return (2 / math.pi) * np.arctan(10 * inf_radius)
 
 
+@njit
 def sigmoid_growth(time, speed, takeoff_time):
     """
     Gives the current technology level for the agent. Assumes a

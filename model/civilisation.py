@@ -45,6 +45,9 @@ class Civilisation(mesa.Agent):
         # save ipomdp reasoning level
         self.level = reasoning_level
 
+        # agent state will be initialised elsewhere
+        self._state = None
+
         # initialise own tech level
         self.step_tech_level()
 
@@ -239,13 +242,6 @@ class Civilisation(mesa.Agent):
         if self.model.debug:
             print(f"t={self.model.schedule.time}, {self.unique_id}:", *message)
 
-    def _init_state(self):
-        """Initialises the state array"""
-        if self.model.agent_growth == growth.sigmoid_growth:
-            self._state = np.zeros(4)
-        else:
-            raise NotImplementedError()
-
     def get_state(self):
         """
         Updates self._state and returns it.
@@ -259,8 +255,8 @@ class Civilisation(mesa.Agent):
         The last two are related to the specific growth model assumed, and
         will therefore be different with different growth types
         """
-        if not hasattr(self, "_state"):
-            self._init_state()
+        if self._state is None:
+            self._state = np.zeros(self.model.agent_state_size)
 
         if self.model.agent_growth == growth.sigmoid_growth:
             self._state[0] = self.model.schedule.time - self.reset_time

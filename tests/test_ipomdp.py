@@ -189,7 +189,10 @@ class TestObservationProbability(unittest.TestCase):
                 ],
             ]
         )
-        actions = ({ag0: action.NO_ACTION}, {ag0: action.NO_ACTION})
+
+        # actions = ({ag0: action.NO_ACTION}, {ag0: action.NO_ACTION})
+        actor_ids = np.array([0, 0])
+        target_ids = np.array([-1, -1])
 
         # array of size (n_states, n_agents)
         tech_levels = growth.tech_level(state=states, model=mdl)
@@ -210,7 +213,12 @@ class TestObservationProbability(unittest.TestCase):
         )
 
         weights = ipomdp.prob_observation(
-            observation=ag0_obs, states=states, actions=actions, observer=ag0, model=mdl
+            observation=ag0_obs,
+            states=states,
+            prev_action_actor_ids=actor_ids,
+            prev_action_target_ids=target_ids,
+            observer=ag0,
+            model=mdl,
         )
 
         correct_weights = np.array(
@@ -240,7 +248,12 @@ class TestObservationProbability(unittest.TestCase):
         )
 
         weights = ipomdp.prob_observation(
-            observation=ag1_obs, states=states, actions=actions, observer=ag1, model=mdl
+            observation=ag1_obs,
+            states=states,
+            prev_action_actor_ids=actor_ids,
+            prev_action_target_ids=target_ids,
+            observer=ag1,
+            model=mdl,
         )
 
         correct_weights = np.array(
@@ -273,7 +286,10 @@ class TestObservationProbability(unittest.TestCase):
                 ],
             ]
         )
-        actions = ({ag0: ag1}, {ag1: ag0})
+
+        # actions = ({ag0: ag1}, {ag1: ag0})
+        actor_ids = np.array([0, 1])
+        target_ids = np.array([1, 0])
 
         ### test observations of agent 0
 
@@ -281,7 +297,8 @@ class TestObservationProbability(unittest.TestCase):
         weights = ipomdp.prob_observation(
             observation=observation1_ag0,
             states=states,
-            actions=actions,
+            prev_action_actor_ids=actor_ids,
+            prev_action_target_ids=target_ids,
             observer=ag0,
             model=mdl,
         )
@@ -293,7 +310,8 @@ class TestObservationProbability(unittest.TestCase):
         weights = ipomdp.prob_observation(
             observation=observation2_ag0,
             states=states,
-            actions=actions,
+            prev_action_actor_ids=actor_ids,
+            prev_action_target_ids=target_ids,
             observer=ag0,
             model=mdl,
         )
@@ -309,7 +327,8 @@ class TestObservationProbability(unittest.TestCase):
         weights = ipomdp.prob_observation(
             observation=observation1_ag1,
             states=states,
-            actions=actions,
+            prev_action_actor_ids=actor_ids,
+            prev_action_target_ids=target_ids,
             observer=ag1,
             model=mdl,
         )
@@ -321,7 +340,8 @@ class TestObservationProbability(unittest.TestCase):
         weights = ipomdp.prob_observation(
             observation=observation2_ag1,
             states=states,
-            actions=actions,
+            prev_action_actor_ids=actor_ids,
+            prev_action_target_ids=target_ids,
             observer=ag1,
             model=mdl,
         )
@@ -383,9 +403,6 @@ class TestObservationSample(unittest.TestCase):
             {weak: action.HIDE},
             {weak: strong},
         )
-
-        print(mdl._distances_tech_level)
-        print(growth.tech_level(propagated_states, mdl))
 
         ### strong attacks weak
         # observation of strong

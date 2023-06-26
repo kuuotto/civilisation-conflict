@@ -3,17 +3,20 @@
 # avoids having to give type annotations as strings
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # avoid circular imports with type hints
     from model import universe, ipomdp_solver
+    from numpy.typing import NDArray
 
 import numpy as np
+from numba import njit
 from model import growth, action, civilisation, ipomdp_solver
 
 
-def _norm_pdf(x, mean, sd):
+@njit
+def _norm_pdf(x: NDArray, mean: NDArray, sd: float):
     """
     Calculate the pdf of the (univariate) normal distribution with given
     parameters.
@@ -169,11 +172,51 @@ def reward(
 
 
 def prob_observation(
+    observation,
+    states,
+    prev_action_actor_ids,
+    prev_action_target_ids,
+    observer,
+    model,
+):
+    """
+    TODO
+    """
+    # calculate current and previous tech levels
+    # these are of shape (n_states, n_agents)
+    tech_levels = growth.tech_level(state=states, model=model)
+    states[..., 0] -= 1
+    prev_tech_levels = growth.tech_level(state=states, model=model)
+    states[..., 0] += 1
+
+    observation = np.array(observation, dtype=float)
+
+    return _prob_observation(
+        observation=observation,
+        states=states,
+        observer_id=observer.id,
+        tech_levels=tech_levels,
+        prev_tech_levels=prev_tech_levels,
+        actor_ids=prev_action_actor_ids,
+        attack_target_ids=prev_action_target_ids,
+        distances_tech_level=model._distances_tech_level,
+        n_agents=model.n_agents,
+        obs_noise_sd=model.obs_noise_sd,
+    )
+
+
+@njit
+def _prob_observation(
     observation: ipomdp_solver.Observation,
-    states: ipomdp_solver.State,
-    actions: Tuple(ipomdp_solver.Action),
-    observer: civilisation.Civilisation,
-    model: universe.Universe,
+    states,
+    observer_id: int,
+    tech_levels,
+    prev_tech_levels,
+    actor_ids,
+    attack_target_ids,
+    distances_tech_level,
+    n_agents,
+    obs_noise_sd,
 ) -> float:
     """
     Returns the probability (density) of a given observation by “agent”, given
@@ -194,115 +237,134 @@ def prob_observation(
     observer: the observing Civilisation
     model: a Universe. Used for determining distances between civilisations.
     """
-
-    # if only a single state and action were supplied, transform them to the correct
-    # format
-    multiple_states = len(states.shape) == 3
-
-    if not multiple_states:
-        states = states[np.newaxis]
-
-    if not isinstance(actions, tuple):
-        actions = tuple((actions,))
-
     n_states = len(states)
-
-    # make sure that there are the same number of actions and states
-    assert len(actions) == n_states
 
     # initialise result
     probabilities = np.ones(shape=n_states)
 
-    # calculate tech levels and previous tech levels
-    # these are of shape (n_states, n_agents)
-    tech_levels = growth.tech_level(state=states, model=model)
-    states[..., 0] -= 1
-    prev_tech_levels = growth.tech_level(state=states, model=model)
-    states[..., 0] += 1
-
     ### 1. determine if the success bits in the observation are correct
 
-    # turn actions into two arrays for convenience (both are length n_states)
-    actor_ids = np.array(tuple(actor.id for action in actions for actor in action))
-    attack_target_ids = np.array(
-        tuple(
-            target.id if isinstance(target, civilisation.Civilisation) else np.nan
-            for action in actions
-            for target in action.values()
-        )
-    )
-
     # array of length n_states
-    observer_attacked = (actor_ids == observer.id) & ~np.isnan(attack_target_ids)
-    obs_observer_attacked = observation[-2] is not None
+    observer_attacked = (actor_ids == observer_id) & (attack_target_ids != -1)
+    obs_observer_attacked = not np.isnan(observation[-2])
 
     # check if observer was actually capable of attacking last round
-    if observer_attacked.any():
-        # array of length k, where k <= n_states is the number of attacks
-        targets = attack_target_ids[observer_attacked]
+    # if observer_attacked.any():
+    #     # array of length k, where k <= n_states is the number of attacks
+    #     targets = attack_target_ids[observer_attacked]
 
-        # array of length k
-        prev_observer_tech_level = prev_tech_levels[observer_attacked, observer.id]
+    #     # array of length k
+    #     prev_observer_tech_level = prev_tech_levels[observer_attacked, observer_id]
 
-        # array of length k
+    #     # array of length k
+    #     observer_capable = (
+    #         distances_tech_level[observer_id, targets] < prev_observer_tech_level
+    #     )
+
+    #     # agent attacked another only if it attempted to and it is capable
+    #     observer_attacked[observer_attacked] = observer_capable
+    for i in range(n_states):
+        if not observer_attacked[i]:
+            continue
+
+        target = attack_target_ids[i]
+
+        prev_observer_tech_level = prev_tech_levels[i, observer_id]
+
         observer_capable = (
-            model._distances_tech_level[observer.id, targets] < prev_observer_tech_level
+            distances_tech_level[observer_id, target] < prev_observer_tech_level
         )
 
-        # agent attacked another only if it attempted to and it is capable
-        observer_attacked[observer_attacked] = observer_capable
+        observer_attacked[i] = observer_attacked[i] & observer_capable
 
     # observation should agree with the previous action about attacking
     probabilities *= observer_attacked == obs_observer_attacked
 
     # observation should agree with the state about the outcome of the attack
-    if observer_attacked.any():
-        targets = attack_target_ids[observer_attacked]
-        attack_successful = states[observer_attacked, targets, 0] == 0
-        obs_attack_successful = observation[-2]
+    # if observer_attacked.any():
+    #     targets = attack_target_ids[observer_attacked]
+    #     attack_successful = states[observer_attacked, targets, 0] == 0
+    #     obs_attack_successful = observation[-2]
 
-        probabilities[observer_attacked] *= attack_successful == obs_attack_successful
+    #     probabilities[observer_attacked] *= attack_successful == obs_attack_successful
+
+    obs_attack_successful = observation[-2]
+    for i in range(n_states):
+        if not observer_attacked[i]:
+            continue
+
+        target = attack_target_ids[i]
+        attack_successful = states[i, target, 0] == 0
+
+        probabilities[i] *= attack_successful == obs_attack_successful
 
     #######
 
-    observer_targeted = attack_target_ids == observer.id
-    obs_agent_targeted = observation[-1] is not None
+    observer_targeted = attack_target_ids == observer_id
+    obs_agent_targeted = not np.isnan(observation[-1])
 
     # check if actor was actually capable of attacking last round
-    if observer_targeted.any():
-        # array of length j, where j <= n_states is the number of attacks on observer
-        actors = actor_ids[observer_targeted]
+    # if observer_targeted.any():
+    #     # array of length j, where j <= n_states is the number of attacks on observer
+    #     actors = actor_ids[observer_targeted]
 
-        # array of length j
-        prev_actor_tech_levels = prev_tech_levels[observer_targeted, actors]
+    #     # array of length j
+    #     prev_actor_tech_levels = prev_tech_levels[observer_targeted, actors]
 
-        # array of length j
-        actor_capable = (
-            model._distances_tech_level[observer.id, actors] < prev_actor_tech_levels
-        )
+    #     # array of length j
+    #     actor_capable = (
+    #         distances_tech_level[observer_id, actors] < prev_actor_tech_levels
+    #     )
 
-        # agent was targeted only if it was attempted and if the actor was capable
-        observer_targeted[observer_targeted] = actor_capable
+    #     # agent was targeted only if it was attempted and if the actor was capable
+    #     observer_targeted[observer_targeted] = actor_capable
+
+    for i in range(n_states):
+        if not observer_targeted[i]:
+            continue
+
+        actor = actor_ids[i]
+
+        prev_actor_tech_level = prev_tech_levels[i, actor]
+
+        actor_capable = distances_tech_level[observer_id, actor] < prev_actor_tech_level
+
+        observer_targeted[i] = observer_targeted[i] & actor_capable
 
     # observation should agree with previous action about being targeted
     probabilities *= observer_targeted == obs_agent_targeted
 
     # observation should agree with the state about the outcome of the attack
-    if observer_targeted.any():
-        attack_successful = states[observer_targeted, observer.id, 0] == 0
-        obs_attack_successful = observation[-1]
+    # if observer_targeted.any():
+    #     attack_successful = states[observer_targeted, observer_id, 0] == 0
+    #     obs_attack_successful = observation[-1]
 
-        probabilities[observer_targeted] *= attack_successful == obs_attack_successful
+    #     probabilities[observer_targeted] *= attack_successful == obs_attack_successful
+
+    obs_attack_successful = observation[-1]
+    for i in range(n_states):
+        if not observer_targeted[i]:
+            continue
+
+        attack_successful = states[i, observer_id, 0] == 0
+        probabilities[i] *= attack_successful == obs_attack_successful
 
     ### 2. Calculate the probability from the technosignatures
 
-    observation = observation[: model.n_agents]
-    # determine which agents we should have observed in the current state
-    # array of shape (n_states, n_agents)
-    observed_agents = (
-        model._distances_tech_level[observer.id, :]
-        < tech_levels[:, observer.id][np.newaxis].T
-    )
+    observation = observation[:n_agents]
+    # # determine which agents we should have observed in the current state
+    # # array of shape (n_states, n_agents)
+    # observed_agents = (
+    #     distances_tech_level[observer_id, :] < tech_levels[:, observer_id][np.newaxis].T
+    # )
+    observed_agents = np.zeros(shape=(n_states, n_agents), dtype=np.bool_)
+    for i in range(n_states):
+        observer_tech_level = tech_levels[i, observer_id]
+
+        # array of length n_agents
+        distances = distances_tech_level[observer_id, :]
+
+        observed_agents[i] = distances < observer_tech_level
 
     # find expected observations from all agents
     # - technosignature from neighbours
@@ -311,15 +373,15 @@ def prob_observation(
     # this is an array of shape (n_states, n_agents)
     expected_observation = tech_levels * states[:, :, 1]
     expected_observation = np.where(observed_agents, expected_observation, observation)
-    expected_observation[:, observer.id] = tech_levels[:, observer.id]
+    expected_observation[:, observer_id] = tech_levels[:, observer_id]
 
     # find individual densities of observations
-    densities = _norm_pdf(
-        x=observation, mean=expected_observation, sd=model.obs_noise_sd
-    )
+    densities = _norm_pdf(x=observation, mean=expected_observation, sd=obs_noise_sd)
 
     # multiply to get final probabilities
-    probabilities *= densities.prod(axis=1)
+    # probabilities *= densities.prod(axis=1)
+    for i in range(n_states):
+        probabilities[i] *= densities[i, :].prod()
 
     return probabilities
 

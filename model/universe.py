@@ -107,6 +107,11 @@ class Universe(mesa.Model):
         self.debug = debug
         self.log_events = log_events
 
+        if self.agent_growth == growth.sigmoid_growth:
+            self.agent_state_size = 4
+        else:
+            raise NotImplementedError
+
         # initialise random number generator
         self.rng = np.random.default_rng(seed)
 

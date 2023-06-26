@@ -200,22 +200,17 @@ class TestParticleReinvigoration(unittest.TestCase):
 class TestResampling(unittest.TestCase):
     def test_systematic_resampling_1(self):
         rng = random.Random(0)
-        sample = [0, 1, 2, 3, 4, 5]
-        weights = (0.0999, 0.0001, 0.2, 0.4, 0.2, 0.1)
-        N = len(sample)
+        # sample = [0, 1, 2, 3, 4, 5]
+        weights = np.array([0.0999, 0.0001, 0.2, 0.4, 0.2, 0.1])
+        N = len(weights)
 
         # repeat resampling multiple times
         for _ in range(100):
-            resample, counts = ipomdp_solver.systematic_resample(
-                sample=sample,
+            counts = ipomdp_solver.systematic_resample(
                 weights=weights,
-                rng=rng,
+                r=rng.random(),
+                size=N,
             )
-
-            # check that the resample and counts match
-            correct_counts = Counter(resample)
-            for val, count in zip(sample, counts):
-                self.assertEqual(count, correct_counts[val])
 
             # check that each value was sampled between floor(Nw) and floor(NW) + 1 times
             for weight, count in zip(weights, counts):
@@ -228,26 +223,19 @@ class TestResampling(unittest.TestCase):
     def test_systematic_resampling_2(self):
         rng = random.Random(0)
         N = 10
-        sample = list(range(N))
 
         # repeat resampling multiple times
         for _ in range(100):
             # generate random weights
-            weights = tuple(rng.random() for _ in range(N))
-            weight_sum = sum(weights)
-            weights = tuple(w / weight_sum for w in weights)
+            weights = np.array([rng.random() for _ in range(N)])
+            weights /= weights.sum()
 
             # resample
-            resample, counts = ipomdp_solver.systematic_resample(
-                sample=sample,
+            counts = ipomdp_solver.systematic_resample(
                 weights=weights,
-                rng=rng,
+                r=rng.random(),
+                size=N,
             )
-
-            # check that the resample and counts match
-            correct_counts = Counter(resample)
-            for val, count in zip(sample, counts):
-                self.assertEqual(count, correct_counts[val])
 
             # check that each value was sampled between floor(Nw) and floor(NW) + 1 times
             for weight, count in zip(weights, counts):
@@ -273,18 +261,262 @@ class TestResampling(unittest.TestCase):
         weights = rng.random(size=n_particles)
         weights = weights / weights.sum()
 
-        for particle, weight in zip(node.particles, weights, strict=True):
-            particle.weight = weight
+        node.belief = weights
 
         # resample
         node.resample_particles()
 
-        # make sure that belief has correct length
-        self.assertEqual(len(node.belief), n_particles)
-
         # make sure that weights of all particles are either 1/n_particles or 0
         for particle in node.particles:
-            if particle in node.belief:
+            if node.resample_counts[particle.id] > 0:
                 self.assertEqual(particle.weight, 1 / n_particles)
             else:
                 self.assertEqual(particle.weight, 0)
+
+
+class TestActionQualityCalculation(unittest.TestCase):
+    def test_action_qualities_1(self):
+        # tests calculating the action values with only a single particle
+        belief = np.array([1.0])
+        n_expansions = np.array([10]).astype(np.float_)
+        n_expansions_act = np.array([[2, 3, 5]]).astype(np.float_)
+        act_value = np.array([[-1, -0.5, -0.1]])
+
+        # correct action qualities
+        correct_action_qualities = np.array([-1, -0.5, -0.1])
+
+        action_qualities = ipomdp_solver.calculate_action_qualities(
+            belief=belief,
+            n_expansions=n_expansions,
+            n_expansions_act=n_expansions_act,
+            act_value=act_value,
+            explore=False,
+            softargmax=False,
+            exploration_coef=0,
+        )
+
+        self.assertTrue((action_qualities == correct_action_qualities).all())
+
+    def test_action_qualities_2(self):
+        # calculates the action values for three particles simultaneously
+        n_particles = 3
+        n_actions = 3
+
+        belief = np.array([0.4, 0.6, 0.0])
+        n_expansions = np.array([10, 12, 5]).astype(np.float_)
+        n_expansions_act = np.array(
+            [
+                [2, 3, 5],
+                [6, 6, 0],
+                [0, 2, 3],
+            ]
+        ).astype(np.float_)
+        act_value = np.array(
+            [
+                [-1, -0.5, -0.1],
+                [0, -0.5, 0],
+                [0, -1.5, -0.8],
+            ]
+        )
+
+        # correct action qualities
+        N = sum(n_expansions[p_i] for p_i in range(n_particles) if belief[p_i] > 0)
+        W = sum(belief[p_i] * n_expansions[p_i] for p_i in range(n_particles))
+        W_a = np.array(
+            [
+                sum(
+                    belief[p_i] * n_expansions_act[p_i, a_i]
+                    for p_i in range(n_particles)
+                )
+                for a_i in range(n_actions)
+            ]
+        )
+        Q = np.array(
+            [
+                sum(belief[p_i] * act_value[p_i, a_i] for p_i in range(n_particles))
+                / sum(
+                    belief[p_i]
+                    for p_i in range(n_particles)
+                    if n_expansions_act[p_i, a_i] > 0
+                )
+                for a_i in range(n_actions)
+            ]
+        )
+
+        action_qualities = ipomdp_solver.calculate_action_qualities(
+            belief=belief,
+            n_expansions=n_expansions,
+            n_expansions_act=n_expansions_act,
+            act_value=act_value,
+            explore=False,
+            softargmax=False,
+            exploration_coef=0,
+        )
+
+        self.assertTrue((action_qualities == Q).all())
+
+    def test_action_qualities_3(self):
+        # testing unexplored actions
+        # calculates the action values for three particles simultaneously
+        n_particles = 4
+        n_actions = 5
+
+        belief = np.array([0.3, 0.3, 0.0, 0.4])
+        n_expansions = np.array([1, 1, 1, 1]).astype(np.float_)
+        n_expansions_act = np.array(
+            [
+                [1, 0, 0, 0, 0],
+                [0, 1, 0, 0, 0],
+                [0, 0, 1, 0, 0],
+                [0, 0, 0, 1, 0],
+            ]
+        ).astype(np.float_)
+        act_value = np.array(
+            [
+                [-2, 0, 0, 0, 0],
+                [0, -0.25, 0, 0, 0],
+                [0, 0, -0.1, 0, 0],
+                [0, 0, 0, 0, 0],
+            ]
+        )
+
+        action_qualities = ipomdp_solver.calculate_action_qualities(
+            belief=belief,
+            n_expansions=n_expansions,
+            n_expansions_act=n_expansions_act,
+            act_value=act_value,
+            explore=True,
+            softargmax=False,
+            exploration_coef=0,
+        )
+
+        # unexplored action (index 4) should equal np.infty
+        # action is unexplored because no particle has tried it
+        self.assertTrue(np.isinf(action_qualities[4]))
+
+        # other unexplored action (index 2) should equal np.infty
+        # action is unexplored because only particle with index 2 (which has
+        # weight 0) tried it
+        self.assertTrue(np.isinf(action_qualities[2]))
+
+        # other actions should not have an infinite quality
+        self.assertTrue(not np.isinf(action_qualities[[0, 1, 3]]).any())
+
+    def test_action_qualities_4(self):
+        # testing softargmax
+        # calculates the action values for three particles simultaneously
+        n_particles = 3
+        n_actions = 3
+
+        belief = np.array([0.4, 0.6, 0.0])
+        n_expansions = np.array([10, 12, 5]).astype(np.float_)
+        n_expansions_act = np.array(
+            [
+                [2, 3, 5],
+                [6, 6, 0],
+                [0, 2, 3],
+            ]
+        ).astype(np.float_)
+        act_value = np.array(
+            [
+                [-1, -0.5, -0.1],
+                [0, -0.5, 0],
+                [0, -1.5, -0.8],
+            ]
+        )
+
+        # correct action qualities
+        N = sum(n_expansions[p_i] for p_i in range(n_particles) if belief[p_i] > 0)
+        W = sum(belief[p_i] * n_expansions[p_i] for p_i in range(n_particles))
+        W_a = np.array(
+            [
+                sum(
+                    belief[p_i] * n_expansions_act[p_i, a_i]
+                    for p_i in range(n_particles)
+                )
+                for a_i in range(n_actions)
+            ]
+        )
+
+        # this is a slightly different, but equivalent way to calculate the action
+        # probabilities
+        action_probabilities = np.exp((W_a / W) * np.sqrt(N))
+        action_probabilities /= action_probabilities.sum()
+
+        action_qualities = ipomdp_solver.calculate_action_qualities(
+            belief=belief,
+            n_expansions=n_expansions,
+            n_expansions_act=n_expansions_act,
+            act_value=act_value,
+            explore=False,
+            softargmax=True,
+            exploration_coef=0,
+        )
+
+        self.assertTrue(np.allclose(action_qualities, action_probabilities))
+
+    def test_action_qualities_5(self):
+        # testing exploration term
+        # calculates the action values for three particles simultaneously
+        n_particles = 4
+        n_actions = 4
+        exploration_coef = 0.5
+
+        belief = np.array([0.3, 0.2, 0.1, 0.4])
+        n_expansions = np.array([1, 1, 1, 1]).astype(np.float_)
+        n_expansions_act = np.array(
+            [
+                [1, 0, 0, 0],
+                [0, 1, 0, 0],
+                [0, 0, 1, 0],
+                [0, 0, 0, 1],
+            ]
+        ).astype(np.float_)
+        act_value = np.array(
+            [
+                [-2, 0, 0, 0],
+                [0, -0.25, 0, 0],
+                [0, 0, -0.1, 0],
+                [0, 0, 0, 0],
+            ]
+        )
+
+        # correct action qualities
+        N = sum(n_expansions[p_i] for p_i in range(n_particles) if belief[p_i] > 0)
+        W = sum(belief[p_i] * n_expansions[p_i] for p_i in range(n_particles))
+        W_a = np.array(
+            [
+                sum(
+                    belief[p_i] * n_expansions_act[p_i, a_i]
+                    for p_i in range(n_particles)
+                )
+                for a_i in range(n_actions)
+            ]
+        )
+        N_a = (W_a / W) * N
+        Q = np.array(
+            [
+                sum(belief[p_i] * act_value[p_i, a_i] for p_i in range(n_particles))
+                / sum(
+                    belief[p_i]
+                    for p_i in range(n_particles)
+                    if n_expansions_act[p_i, a_i] > 0
+                )
+                for a_i in range(n_actions)
+            ]
+        )
+
+        # add exploration term
+        Q += exploration_coef * np.sqrt(np.log(N) / N_a)
+
+        action_qualities = ipomdp_solver.calculate_action_qualities(
+            belief=belief,
+            n_expansions=n_expansions,
+            n_expansions_act=n_expansions_act,
+            act_value=act_value,
+            explore=True,
+            softargmax=False,
+            exploration_coef=exploration_coef,
+        )
+
+        self.assertTrue((action_qualities == Q).all())
