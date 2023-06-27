@@ -520,3 +520,132 @@ class TestActionQualityCalculation(unittest.TestCase):
         )
 
         self.assertTrue((action_qualities == Q).all())
+
+
+class TestTreeExpansion(unittest.TestCase):
+    def test_tree_properties_after_planning(self):
+        # tests that the forests of agents look as expected after planning
+
+        mdl = helpers.create_small_universe(
+            n_agents=2,
+            reasoning_level=1,
+            n_tree_simulations=100,
+        )
+        ag0, ag1 = mdl.agents
+
+        # plan
+        ag0.forest.plan()
+        ag1.forest.plan()
+
+        # check all nodes in agent 0's trees
+        for tree in ag0.forest.trees.values():
+            for root_node in tree.root_nodes:
+                self._check_node(node=root_node, single_planning_step=True)
+
+        # check all nodes in agent 1's trees
+        for tree in ag1.forest.trees.values():
+            for root_node in tree.root_nodes:
+                self._check_node(node=root_node, single_planning_step=True)
+
+    def test_tree_properties_after_planning_2(self):
+        # tests that the forests of agents look as expected after planning and 
+        # belief update
+
+        mdl = helpers.create_small_universe(
+            n_agents=2,
+            reasoning_level=1,
+            n_tree_simulations=100,
+        )
+        ag0, ag1 = mdl.agents
+
+        # plan + belief update
+        mdl.step()
+
+        # check all nodes in agent 0's trees
+        for tree in ag0.forest.trees.values():
+            for root_node in tree.root_nodes:
+                self._check_node(node=root_node, single_planning_step=True)
+
+        # check all nodes in agent 1's trees
+        for tree in ag1.forest.trees.values():
+            for root_node in tree.root_nodes:
+                self._check_node(node=root_node, single_planning_step=True)
+
+    def _check_node(self, node: ipomdp_solver.Node, single_planning_step: bool):
+        """
+        Checks that the given node looks like it should (see comments for more
+        information on what this means).
+        """
+        mdl = node.tree.forest.owner.model
+        agent = node.tree.agent
+
+        n_particles = len(node.particles)
+        is_root_node = node.parent_node is None
+
+        # if node is a root node, check that its particles have stored weights
+        if node.tree.level > 0 and is_root_node:
+            other_agents = tuple(a for a in mdl.agents if a != agent)
+
+            for particle in node.particles:
+                for other_agent in other_agents:
+                    self.assertIn(other_agent, particle.lower_particle_dist)
+
+                    weights = particle.lower_particle_dist[other_agent]
+                    self.assertIsInstance(weights, np.ndarray)
+
+                    # find matching node
+                    lower_node = node.tree.forest.get_matching_lower_node(
+                        particle=particle, agent=other_agent
+                    )
+
+                    # check that the length of the weights matches the number of particles
+                    self.assertEqual(len(weights), len(lower_node.particles))
+
+        for particle in node.particles:
+            # check that particle has an index that matches its index in the list
+            self.assertTrue(particle.id is not None)
+            self.assertTrue(particle.added_to_node)
+            self.assertEqual(node.particles[particle.id], particle)
+
+            # check that previous particle id is correct
+            if not is_root_node:
+                self.assertEqual(
+                    particle.previous_particle.id, node.prev_particle_ids[particle.id]
+                )
+
+            # check that particles in root nodes don't have references to previous
+            # particles
+            if is_root_node:
+                self.assertTrue(particle.previous_particle is None)
+
+            # check that the agent action history of particle matches that of node
+            self.assertEqual(
+                particle.agent_action_history(agent), node.agent_action_history
+            )
+
+        for agent_action, child_node in node.child_nodes.items():
+            # check that agent action history of child node is correct
+            self.assertEqual(
+                child_node.agent_action_history,
+                node.agent_action_history + (agent_action,),
+            )
+
+        # check that n_expansions and n_expansions_act are correct
+        n_expansions = node.n_expansions
+        n_expansions_act = node.n_expansions_act
+
+        # check shapes
+        self.assertEqual(n_expansions.shape, (n_particles,))
+        self.assertEqual(n_expansions_act.shape, (n_particles, 3))  # 3 actions
+
+        # check that n_expansions_act sums to n_expansions
+        self.assertTrue((n_expansions_act.sum(axis=1) == n_expansions).all())
+
+        # if this is not a root node, n_expansions should all at most 1 after
+        # one step of planning
+        if not is_root_node and single_planning_step:
+            self.assertEqual((n_expansions > 1).sum(), 0)
+
+        #### check child nodes recursively
+        for child_node in node.child_nodes.values():
+            self._check_node(node=child_node, single_planning_step=single_planning_step)
