@@ -21,7 +21,7 @@ class TestTransition(unittest.TestCase):
         )
 
         ### strong attacking a weak agent
-        destroy_action = {model.agents[1]: model.agents[0]}
+        destroy_action = (model.agents[1], model.agents[0])
 
         destroyed_state = ipomdp.transition(
             state=model_state, action_=destroy_action, model=model
@@ -47,7 +47,7 @@ class TestTransition(unittest.TestCase):
         self.assertTrue((destroyed_state == correct_state).all())
 
         ### weak agent attacking a strong agent
-        failed_attack_action = {model.agents[0]: model.agents[1]}
+        failed_attack_action = (model.agents[0], model.agents[1])
 
         intact_state = ipomdp.transition(
             state=model_state, action_=failed_attack_action, model=model
@@ -73,7 +73,7 @@ class TestTransition(unittest.TestCase):
         self.assertTrue((intact_state == correct_state).all())
 
         ### hiding action
-        hiding_action = {model.agents[4]: action.HIDE}
+        hiding_action = (model.agents[4], action.HIDE)
 
         hidden_state = ipomdp.transition(
             state=model_state, action_=hiding_action, model=model
@@ -99,7 +99,7 @@ class TestTransition(unittest.TestCase):
         self.assertTrue((hidden_state == correct_state).all())
 
         ### skip action
-        skip_action = {model.agents[3]: action.NO_ACTION}
+        skip_action = (model.agents[3], action.NO_ACTION)
 
         skipped_state = ipomdp.transition(
             state=model_state, action_=skip_action, model=model
@@ -223,16 +223,20 @@ class TestObservationProbability(unittest.TestCase):
 
         correct_weights = np.array(
             [
-                norm.pdf(x=ag0_obs[0], loc=ag0_exp_obs_1[0], scale=mdl.obs_noise_sd)
+                norm.pdf(
+                    x=ag0_obs[0], loc=ag0_exp_obs_1[0], scale=mdl.obs_self_noise_sd
+                )
                 * norm.pdf(x=ag0_obs[1], loc=ag0_exp_obs_1[1], scale=mdl.obs_noise_sd),
-                norm.pdf(x=ag0_obs[0], loc=ag0_exp_obs_2[0], scale=mdl.obs_noise_sd)
+                norm.pdf(
+                    x=ag0_obs[0], loc=ag0_exp_obs_2[0], scale=mdl.obs_self_noise_sd
+                )
                 * norm.pdf(x=ag0_obs[1], loc=ag0_exp_obs_2[1], scale=mdl.obs_noise_sd),
             ]
         )
 
         self.assertTrue(np.allclose(weights, correct_weights))
 
-        ### check observation weights of agent 0
+        ### check observation weights of agent 1
         ag1_obs = (0.6, -0.1, None, None)
         ag1_exp_obs_1 = (
             ag1_obs[0],
@@ -259,9 +263,13 @@ class TestObservationProbability(unittest.TestCase):
         correct_weights = np.array(
             [
                 norm.pdf(x=ag1_obs[0], loc=ag1_exp_obs_1[0], scale=mdl.obs_noise_sd)
-                * norm.pdf(x=ag1_obs[1], loc=ag1_exp_obs_1[1], scale=mdl.obs_noise_sd),
+                * norm.pdf(
+                    x=ag1_obs[1], loc=ag1_exp_obs_1[1], scale=mdl.obs_self_noise_sd
+                ),
                 norm.pdf(x=ag1_obs[0], loc=ag1_exp_obs_2[0], scale=mdl.obs_noise_sd)
-                * norm.pdf(x=ag1_obs[1], loc=ag1_exp_obs_2[1], scale=mdl.obs_noise_sd),
+                * norm.pdf(
+                    x=ag1_obs[1], loc=ag1_exp_obs_2[1], scale=mdl.obs_self_noise_sd
+                ),
             ]
         )
 
@@ -395,13 +403,13 @@ class TestObservationSample(unittest.TestCase):
             ]
         )
         prev_actions = (
-            {strong: weak},
-            {strong: action.NO_ACTION},
-            {strong: action.HIDE},
-            {weak: strong},
-            {weak: action.NO_ACTION},
-            {weak: action.HIDE},
-            {weak: strong},
+            (strong, weak),
+            (strong, action.NO_ACTION),
+            (strong, action.HIDE),
+            (weak, strong),
+            (weak, action.NO_ACTION),
+            (weak, action.HIDE),
+            (weak, strong),
         )
 
         ### strong attacks weak
@@ -603,7 +611,7 @@ class TestReward(unittest.TestCase):
         # check strong's reward
         reward = ipomdp.reward(
             state=states[0],
-            action_={strong: weak},
+            action_=(strong, weak),
             agent=strong,
             model=mdl,
         )
@@ -612,7 +620,7 @@ class TestReward(unittest.TestCase):
         # check weak's reward
         reward = ipomdp.reward(
             state=states[0],
-            action_={strong: weak},
+            action_=(strong, weak),
             agent=weak,
             model=mdl,
         )
@@ -622,7 +630,7 @@ class TestReward(unittest.TestCase):
         # check strong's reward
         reward = ipomdp.reward(
             state=states[0],
-            action_={weak: strong},
+            action_=(weak, strong),
             agent=strong,
             model=mdl,
         )
@@ -631,7 +639,7 @@ class TestReward(unittest.TestCase):
         # check weak's reward
         reward = ipomdp.reward(
             state=states[0],
-            action_={weak: strong},
+            action_=(weak, strong),
             agent=weak,
             model=mdl,
         )
@@ -648,7 +656,7 @@ class TestReward(unittest.TestCase):
         # check strong's reward
         reward = ipomdp.reward(
             state=states[1],
-            action_={weak: strong},
+            action_=(weak, strong),
             agent=strong,
             model=mdl,
         )
@@ -657,7 +665,7 @@ class TestReward(unittest.TestCase):
         # check weak's reward
         reward = ipomdp.reward(
             state=states[1],
-            action_={weak: strong},
+            action_=(weak, strong),
             agent=weak,
             model=mdl,
         )
@@ -666,7 +674,7 @@ class TestReward(unittest.TestCase):
         ### strong hides
         reward = ipomdp.reward(
             state=states[0],
-            action_={strong: action.HIDE},
+            action_=(strong, action.HIDE),
             agent=strong,
             model=mdl,
         )
@@ -675,7 +683,7 @@ class TestReward(unittest.TestCase):
         ### strong skips
         reward = ipomdp.reward(
             state=states[0],
-            action_={strong: action.NO_ACTION},
+            action_=(strong, action.NO_ACTION),
             agent=strong,
             model=mdl,
         )

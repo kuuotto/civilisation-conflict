@@ -1,7 +1,7 @@
 import mesa
 import numpy as np
 
-from model import civilisation, growth, ipomdp
+from model import civilisation, growth
 from typing import Tuple, List, Any
 
 
@@ -16,11 +16,13 @@ class Universe(mesa.Model):
         n_tree_simulations,
         n_reinvigoration_particles,
         obs_noise_sd,
+        obs_self_noise_sd,
         reasoning_level,
         action_dist_0,
         discount_factor,
         discount_epsilon,
         exploration_coef,
+        softargmax_coef,
         visibility_multiplier,
         decision_making,
         init_age_belief_range,
@@ -51,6 +53,8 @@ class Universe(mesa.Model):
                                     for each tree when updating beliefs
         obs_noise_sd: standard deviation of technosignature observation noise \
                       (which follows an unbiased normal distribution)
+        obs_self_noise_sd: standard deviation of own technosignature observation noise \
+                           (which follows an unbiased normal distribution)
         reasoning_level: the level of ipomdp reasoning all civilisations use \
         action_dist_0: the default action distribution at level 0. Level 0 \
                        trees use this to determine the actions of others when \
@@ -64,6 +68,11 @@ class Universe(mesa.Model):
         exploration_coef: used in the MCTS (Monte Carlo Tree Search) based \
                           algorithm to adjust how much exploration of seldomly\
                           visited agent actions is emphasised
+        softargmax_coef: the coefficient used in softargmax. A lower value means \
+                         higher-quality actions are weighted more strongly, whereas \
+                         a higher value means actions are chosen more uniformly and \
+                         less based on the qualities of actions. Analogous to the \
+                         Boltzmann constant k in the Boltzmann distribution.
         visibility_multiplier: how much a single “hide” action multiplies the \
                                current agent visibility factor by
         decision_making: the method used by agents to make decisions. Options \
@@ -93,11 +102,13 @@ class Universe(mesa.Model):
         self.n_tree_simulations = n_tree_simulations
         self.n_reinvigoration_particles = n_reinvigoration_particles
         self.obs_noise_sd = obs_noise_sd
+        self.obs_self_noise_sd = obs_self_noise_sd
         self.reasoning_level = reasoning_level
         self.action_dist_0 = action_dist_0
         self.discount_factor = discount_factor
         self.discount_epsilon = discount_epsilon
         self.exploration_coef = exploration_coef
+        self.softargmax_coef = softargmax_coef
         self.visibility_multiplier = visibility_multiplier
         self.decision_making = decision_making
         self.init_age_belief_range = init_age_belief_range
@@ -214,8 +225,43 @@ class Universe(mesa.Model):
         self.schedule.step()
 
     def add_log_event(self, event_type: int, event_data: Any) -> None:
+        # printing settings
+        debug_print_warnings = self.debug >= 1
+        debug_print_info = self.debug >= 2
+
+        # add event to log
         if self.log_events:
             self.log.append(LogEvent(event_type=event_type, event_data=event_data))
+
+        # code 10 means prediction of others' action when simulating a tree was successful
+
+        if event_type == 11 and debug_print_info:
+            print(
+                f"Could not find a matching node in child tree when simulating {event_data}"
+            )
+        elif event_type == 12 and debug_print_info:
+            print(f"Belief in lower tree has diverged when simulating {event_data}")
+        elif event_type == 13 and debug_print_info:
+            print(
+                f"All actions in lower node have not been expanded when simulating {event_data}"
+            )
+        elif event_type == 21 and debug_print_info:
+            print(
+                f"Lower node belief update {event_data[0]} : {event_data[1]}",
+                f"-> {event_data[2]} : {event_data[3]} saw beliefs diverge",
+            )
+        elif event_type == 22 and debug_print_info:
+            print(
+                f"Lower node belief update {event_data[0]} : {event_data[1]}",
+                f"-> {event_data[2]} : {event_data[3]} could not find the node in",
+                "the lower tree. An empty node was created.",
+            )
+        elif event_type == 22 and debug_print_info:
+            print(
+                f"Lower node belief update {event_data[0]} : {event_data[1]}",
+                f"-> {event_data[2]} : {event_data[3]} found an empty node in",
+                "the lower tree.",
+            )
 
     def _init_state(self):
         """Initialise model state"""
@@ -241,7 +287,7 @@ class Universe(mesa.Model):
         """
         Pre-calculates some constants used in the I-POMDP solver.
         """
-        self.obs_prob_const = ipomdp._norm_pdf(x=0, mean=0, sd=self.obs_noise_sd)
+        # self.obs_prob_const = ipomdp._norm_pdf(x=0, mean=0, sd=self.obs_noise_sd)
 
     def _init_distance_cache(self) -> None:
         """

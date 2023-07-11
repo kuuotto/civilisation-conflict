@@ -3,7 +3,6 @@ import unittest
 import numpy as np
 from model import growth, ipomdp_solver, action
 from tests import helpers
-from collections import Counter
 import random
 import math
 
@@ -123,80 +122,6 @@ class TestSolverInitialState(unittest.TestCase):
                 self.assertEqual(correct_shape, particle.state.shape)
 
 
-class TestParticleReinvigoration(unittest.TestCase):
-    def test_uniform_random_particles(self):
-        model = helpers.create_small_universe(
-            n_agents=3,
-            agent_growth=growth.sigmoid_growth,
-            agent_growth_params={
-                "speed_range": (0.3, 1.0),
-                "takeoff_time_range": (20, 40),
-            },
-            init_age_range=(10, 20),
-            init_age_belief_range=(10, 20),
-        )
-
-        n_particles = 10
-
-        # create node to add particles to
-        tree = model.agents[0].forest.top_level_tree
-        agent_action_history = (action.NO_TURN, action.NO_TURN, action.NO_ACTION)
-        node = ipomdp_solver.Node(
-            tree=tree,
-            agent_action_history=agent_action_history,
-            parent_node=None,
-        )
-
-        # generate particles
-        random_particles = ipomdp_solver.generate_random_particles(
-            n_particles=n_particles,
-            node=node,
-            model=model,
-        )
-
-        # check that the number of generated particles is correct
-        self.assertEqual(len(random_particles), n_particles)
-
-        # check the state in each particle
-        for particle in random_particles:
-            self.assertIsInstance(particle.state, np.ndarray)
-
-            # check shapes
-            self.assertEqual(particle.state.shape, (3, 4))
-
-            # check that values are in the correct ranges
-            for agent_id in range(3):
-                agent_state = particle.state[agent_id]
-
-                # check age
-                allowed_age_range = (0, 20 + len(agent_action_history))
-                self.assertGreaterEqual(agent_state[0], allowed_age_range[0])
-                self.assertLessEqual(agent_state[0], allowed_age_range[1])
-
-                # check visibility
-                allowed_visibility_range = (0, 1)
-                self.assertGreaterEqual(agent_state[1], allowed_visibility_range[0])
-                self.assertLessEqual(agent_state[1], allowed_visibility_range[1])
-
-                # check growth parameters
-                allowed_speed_range = model.agent_growth_params["speed_range"]
-                self.assertGreaterEqual(agent_state[2], allowed_speed_range[0])
-                self.assertLessEqual(agent_state[2], allowed_speed_range[1])
-
-                allowed_takeoff_time_range = model.agent_growth_params[
-                    "takeoff_time_range"
-                ]
-                self.assertGreaterEqual(agent_state[3], allowed_takeoff_time_range[0])
-                self.assertLessEqual(agent_state[3], allowed_takeoff_time_range[1])
-
-        # check that there is some variance between the generated particles
-        all_states = np.stack(tuple(p.state for p in random_particles), axis=0)
-
-        # variance between particles
-        variance = all_states.var(axis=0)
-        self.assertTrue((variance > 0).all())
-
-
 class TestResampling(unittest.TestCase):
     def test_systematic_resampling_1(self):
         rng = random.Random(0)
@@ -278,8 +203,8 @@ class TestActionQualityCalculation(unittest.TestCase):
     def test_action_qualities_1(self):
         # tests calculating the action values with only a single particle
         belief = np.array([1.0])
-        n_expansions = np.array([10]).astype(np.float_)
-        n_expansions_act = np.array([[2, 3, 5]]).astype(np.float_)
+        n_expansions = np.array([10]).astype(np.int32)
+        n_expansions_act = np.array([[2, 3, 5]]).astype(np.int32)
         act_value = np.array([[-1, -0.5, -0.1]])
 
         # correct action qualities
@@ -293,6 +218,7 @@ class TestActionQualityCalculation(unittest.TestCase):
             explore=False,
             softargmax=False,
             exploration_coef=0,
+            softargmax_coef=0,
         )
 
         self.assertTrue((action_qualities == correct_action_qualities).all())
@@ -303,14 +229,112 @@ class TestActionQualityCalculation(unittest.TestCase):
         n_actions = 3
 
         belief = np.array([0.4, 0.6, 0.0])
-        n_expansions = np.array([10, 12, 5]).astype(np.float_)
+        n_expansions = np.array([10, 12, 5]).astype(np.int32)
         n_expansions_act = np.array(
             [
                 [2, 3, 5],
                 [6, 6, 0],
                 [0, 2, 3],
             ]
-        ).astype(np.float_)
+        ).astype(np.int32)
+        act_value = np.array(
+            [
+                [-1, -0.5, -0.1],
+                [0, -0.5, 0],
+                [0, -1.5, -0.8],
+            ]
+        )
+
+        # correct action qualities
+        Q = np.array(
+            [
+                sum(belief[p_i] * act_value[p_i, a_i] for p_i in range(n_particles))
+                / sum(
+                    belief[p_i]
+                    for p_i in range(n_particles)
+                    if n_expansions_act[p_i, a_i] > 0
+                )
+                for a_i in range(n_actions)
+            ]
+        )
+
+        action_qualities = ipomdp_solver.calculate_action_qualities(
+            belief=belief,
+            n_expansions=n_expansions,
+            n_expansions_act=n_expansions_act,
+            act_value=act_value,
+            explore=False,
+            softargmax=False,
+            exploration_coef=0,
+            softargmax_coef=0,
+        )
+
+        self.assertTrue((action_qualities == Q).all())
+
+    def test_action_qualities_3(self):
+        # testing unexplored actions
+        # calculates the action values for three particles simultaneously
+        n_particles = 4
+        n_actions = 5
+
+        belief = np.array([0.3, 0.3, 0.0, 0.4])
+        n_expansions = np.array([1, 1, 1, 1]).astype(np.int32)
+        n_expansions_act = np.array(
+            [
+                [1, 0, 0, 0, 0],
+                [0, 1, 0, 0, 0],
+                [0, 0, 1, 0, 0],
+                [0, 0, 0, 1, 0],
+            ]
+        ).astype(np.int32)
+        act_value = np.array(
+            [
+                [-2, 0, 0, 0, 0],
+                [0, -0.25, 0, 0, 0],
+                [0, 0, -0.1, 0, 0],
+                [0, 0, 0, 0, 0],
+            ]
+        )
+
+        action_qualities = ipomdp_solver.calculate_action_qualities(
+            belief=belief,
+            n_expansions=n_expansions,
+            n_expansions_act=n_expansions_act,
+            act_value=act_value,
+            explore=True,
+            softargmax=False,
+            exploration_coef=0,
+            softargmax_coef=0,
+        )
+
+        # unexplored action (index 4) should equal np.infty
+        # action is unexplored because no particle has tried it
+        self.assertTrue(np.isinf(action_qualities[4]))
+
+        # other unexplored action (index 2) should equal np.infty
+        # action is unexplored because only particle with index 2 (which has
+        # weight 0) tried it
+        self.assertTrue(np.isinf(action_qualities[2]))
+
+        # other actions should not have an infinite quality
+        self.assertTrue(not np.isinf(action_qualities[[0, 1, 3]]).any())
+
+    def test_action_qualities_4(self):
+        # testing softargmax
+        # calculates the action values for three particles simultaneously
+        n_particles = 3
+        n_actions = 3
+        softargmax_coef = 0.1
+
+        belief = np.array([0.4, 0.6, 0.0])
+        n_expansions = np.array([10, 12, 5]).astype(np.int32)
+        n_expansions_act = np.array(
+            [
+                [2, 3, 5],
+                [6, 6, 0],
+                [0, 2, 3],
+            ]
+        ).astype(np.int32)
         act_value = np.array(
             [
                 [-1, -0.5, -0.1],
@@ -343,104 +367,9 @@ class TestActionQualityCalculation(unittest.TestCase):
             ]
         )
 
-        action_qualities = ipomdp_solver.calculate_action_qualities(
-            belief=belief,
-            n_expansions=n_expansions,
-            n_expansions_act=n_expansions_act,
-            act_value=act_value,
-            explore=False,
-            softargmax=False,
-            exploration_coef=0,
-        )
-
-        self.assertTrue((action_qualities == Q).all())
-
-    def test_action_qualities_3(self):
-        # testing unexplored actions
-        # calculates the action values for three particles simultaneously
-        n_particles = 4
-        n_actions = 5
-
-        belief = np.array([0.3, 0.3, 0.0, 0.4])
-        n_expansions = np.array([1, 1, 1, 1]).astype(np.float_)
-        n_expansions_act = np.array(
-            [
-                [1, 0, 0, 0, 0],
-                [0, 1, 0, 0, 0],
-                [0, 0, 1, 0, 0],
-                [0, 0, 0, 1, 0],
-            ]
-        ).astype(np.float_)
-        act_value = np.array(
-            [
-                [-2, 0, 0, 0, 0],
-                [0, -0.25, 0, 0, 0],
-                [0, 0, -0.1, 0, 0],
-                [0, 0, 0, 0, 0],
-            ]
-        )
-
-        action_qualities = ipomdp_solver.calculate_action_qualities(
-            belief=belief,
-            n_expansions=n_expansions,
-            n_expansions_act=n_expansions_act,
-            act_value=act_value,
-            explore=True,
-            softargmax=False,
-            exploration_coef=0,
-        )
-
-        # unexplored action (index 4) should equal np.infty
-        # action is unexplored because no particle has tried it
-        self.assertTrue(np.isinf(action_qualities[4]))
-
-        # other unexplored action (index 2) should equal np.infty
-        # action is unexplored because only particle with index 2 (which has
-        # weight 0) tried it
-        self.assertTrue(np.isinf(action_qualities[2]))
-
-        # other actions should not have an infinite quality
-        self.assertTrue(not np.isinf(action_qualities[[0, 1, 3]]).any())
-
-    def test_action_qualities_4(self):
-        # testing softargmax
-        # calculates the action values for three particles simultaneously
-        n_particles = 3
-        n_actions = 3
-
-        belief = np.array([0.4, 0.6, 0.0])
-        n_expansions = np.array([10, 12, 5]).astype(np.float_)
-        n_expansions_act = np.array(
-            [
-                [2, 3, 5],
-                [6, 6, 0],
-                [0, 2, 3],
-            ]
-        ).astype(np.float_)
-        act_value = np.array(
-            [
-                [-1, -0.5, -0.1],
-                [0, -0.5, 0],
-                [0, -1.5, -0.8],
-            ]
-        )
-
-        # correct action qualities
-        N = sum(n_expansions[p_i] for p_i in range(n_particles) if belief[p_i] > 0)
-        W = sum(belief[p_i] * n_expansions[p_i] for p_i in range(n_particles))
-        W_a = np.array(
-            [
-                sum(
-                    belief[p_i] * n_expansions_act[p_i, a_i]
-                    for p_i in range(n_particles)
-                )
-                for a_i in range(n_actions)
-            ]
-        )
-
         # this is a slightly different, but equivalent way to calculate the action
         # probabilities
-        action_probabilities = np.exp((W_a / W) * np.sqrt(N))
+        action_probabilities = np.exp(Q / (softargmax_coef * (1 / np.sqrt(N))))
         action_probabilities /= action_probabilities.sum()
 
         action_qualities = ipomdp_solver.calculate_action_qualities(
@@ -451,6 +380,7 @@ class TestActionQualityCalculation(unittest.TestCase):
             explore=False,
             softargmax=True,
             exploration_coef=0,
+            softargmax_coef=softargmax_coef,
         )
 
         self.assertTrue(np.allclose(action_qualities, action_probabilities))
@@ -463,7 +393,7 @@ class TestActionQualityCalculation(unittest.TestCase):
         exploration_coef = 0.5
 
         belief = np.array([0.3, 0.2, 0.1, 0.4])
-        n_expansions = np.array([1, 1, 1, 1]).astype(np.float_)
+        n_expansions = np.array([1, 1, 1, 1]).astype(np.int32)
         n_expansions_act = np.array(
             [
                 [1, 0, 0, 0],
@@ -471,7 +401,7 @@ class TestActionQualityCalculation(unittest.TestCase):
                 [0, 0, 1, 0],
                 [0, 0, 0, 1],
             ]
-        ).astype(np.float_)
+        ).astype(np.int32)
         act_value = np.array(
             [
                 [-2, 0, 0, 0],
@@ -517,6 +447,7 @@ class TestActionQualityCalculation(unittest.TestCase):
             explore=True,
             softargmax=False,
             exploration_coef=exploration_coef,
+            softargmax_coef=0,
         )
 
         self.assertTrue((action_qualities == Q).all())
@@ -548,7 +479,7 @@ class TestTreeExpansion(unittest.TestCase):
                 self._check_node(node=root_node, single_planning_step=True)
 
     def test_tree_properties_after_planning_2(self):
-        # tests that the forests of agents look as expected after planning and 
+        # tests that the forests of agents look as expected after planning and
         # belief update
 
         mdl = helpers.create_small_universe(
@@ -590,7 +521,9 @@ class TestTreeExpansion(unittest.TestCase):
                 for other_agent in other_agents:
                     self.assertIn(other_agent, particle.lower_particle_dist)
 
-                    weights = particle.lower_particle_dist[other_agent]
+                    mask, values = particle.lower_particle_dist[other_agent]
+                    weights = np.zeros(len(mask))
+                    weights[mask] = values
                     self.assertIsInstance(weights, np.ndarray)
 
                     # find matching node

@@ -74,7 +74,7 @@ class Civilisation(mesa.Agent):
         constrain the actions to only those that the agent is currently
         capable of.
         """
-        if self._action_set == None:
+        if self._action_set is None:
             self._init_action_set()
 
         if state is None:
@@ -196,7 +196,7 @@ class Civilisation(mesa.Agent):
                     "time": self.model.schedule.time,
                     "actor": self.id,
                     "action": "a",
-                    "attack_target": self.id,
+                    "attack_target": target.id,
                     "attack_successful": result,
                 },
             )
@@ -235,7 +235,7 @@ class Civilisation(mesa.Agent):
             raise Exception("Unrecognised action")
 
         self.previous_agent_action = agent_action
-        self.model.previous_action = {self: agent_action}
+        self.model.previous_action = (self, agent_action)
 
     def dprint(self, *message):
         """Prints message to the console if debugging flag is on"""
