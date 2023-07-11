@@ -6,35 +6,42 @@ import pickle
 
 # %% Run model and gather data
 
-# parameter
+# parameters
 params = {
     "n_agents": 2,
     "agent_growth": growth.sigmoid_growth,
-    "agent_growth_params": {"speed_range": (0.3, 1), "takeoff_time_range": (10, 100)},
+    "agent_growth_params": {
+        "speed_range": (0.5, 0.5),
+        "takeoff_time_range": (20, 40),
+        "speed_noise_scale": 0.03,
+        "speed_noise_dist": "normal",
+        "takeoff_time_noise_scale": 3,
+    },
     "rewards": {"destroyed": -1, "hide": -0.01, "attack": 0},
     "n_root_belief_samples": 1000,
-    "n_tree_simulations": 200,
-    "n_belief_update_samples": 200,
-    "n_reinvigoration_particles": 100,
+    "n_tree_simulations": 10000,
+    "n_reinvigoration_particles": 0,
     "obs_noise_sd": 0.1,
+    "obs_self_noise_sd": 0.03,
     "reasoning_level": 2,
-    "action_dist_0": "random",
-    "discount_factor": 0.9,
-    "discount_epsilon": 0.05,
-    "exploration_coef": 1,
+    "action_dist_0": "random",  # can be "random", "passive" or "aggressive"
+    "discount_factor": 0.7,
+    "discount_epsilon": 0.10,
+    "exploration_coef": 0.1,
+    "softargmax_coef": 0.01,
     "visibility_multiplier": 0.5,
     "decision_making": "ipomdp",
-    "init_age_belief_range": (10, 100),
-    "init_age_range": (10, 100),
+    "init_age_belief_range": (0, 50),
+    "init_age_range": (0, 50),
     "init_visibility_belief_range": (1, 1),
     "init_visibility_range": (1, 1),
 }
 n_steps = 100
 
 # create a universe
-mdl = universe.Universe(debug=True, seed=0, **params)
+mdl = universe.Universe(debug=1, seed=0, **params)
 # simulate
-for id in tqdm(range(n_steps)):
+for i in tqdm(range(n_steps)):
     mdl.step()
 
 # retrieve data

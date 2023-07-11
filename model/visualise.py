@@ -4,9 +4,10 @@ import numpy as np
 import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
+from matplotlib.patches import Circle, Patch
 from matplotlib.animation import ArtistAnimation
-from model import analyse
+from model import analyse, ipomdp_solver, universe, growth
+from typing import List
 
 
 def draw_universe(
@@ -87,34 +88,37 @@ def draw_universe(
         step_data = data.xs(step, level="Step")
 
         ### first draw universal agents (infinite vision)
-        universal_agent_data = step_data[step_data["Radius of Influence"] >= 1]
+        universal_agent_data = step_data[step_data["Radius of Influence"] >= np.sqrt(2)]
         ids = universal_agent_data.index.get_level_values("AgentID")
         positions = universal_agent_data["Position"]
         x = [pos[0] for pos in positions]
         y = [pos[1] for pos in positions]
         colors = [colormap(id % 5) for id in ids]
         facecolors = [
-            c[:3] + (v,)
+            c[:3] + (v,)  # add transparency to color depending on visibility factor
             for c, v in zip(colors, universal_agent_data["Visibility Factor"])
         ]
 
+        # draw symbols
         paths = ax.scatter(
             x, y, edgecolors=colors, s=50, marker="d", facecolor=facecolors
         )
         step_artists.append(paths)
 
         ### draw other agents, showing their radius of influence
-        normal_agent_data = step_data[step_data["Radius of Influence"] < 1]
+        normal_agent_data = step_data[step_data["Radius of Influence"] < np.sqrt(2)]
         ids = normal_agent_data.index.get_level_values("AgentID")
         positions = normal_agent_data["Position"]
         x = [pos[0] for pos in positions]
         y = [pos[1] for pos in positions]
         colors = [colormap(id % 5) for id in ids]
         facecolors = [
-            c[:3] + (v,) for c, v in zip(colors, normal_agent_data["Visibility Factor"])
+            c[:3] + (v,)  # add transparency to color depending on visibility factor
+            for c, v in zip(colors, normal_agent_data["Visibility Factor"])
         ]
         influence_radii = normal_agent_data["Radius of Influence"]
 
+        # draw symbols
         paths = ax.scatter(x, y, edgecolors=colors, facecolors=facecolors, s=20)
         step_artists.append(paths)
 
@@ -154,6 +158,11 @@ def draw_universe(
                 a_x, a_y = actor_pos
                 t_x, t_y = step_data.loc[target_id].Position.values[0]
 
+                # whether target was within the radius of influence of the attacker
+                attack_possible = not np.isnan(
+                    step_action_data["attack_successful"].iat[0]
+                )
+
                 arrow = ax.arrow(
                     x=a_x,
                     y=a_y,
@@ -163,6 +172,7 @@ def draw_universe(
                     width=0.005,
                     head_width=0.03,
                     head_length=0.03,
+                    ls="solid" if attack_possible else "dashed",
                     color="white",
                 )
                 step_artists.append(arrow)
@@ -325,3 +335,308 @@ def plot_streak_length_distribution(action_data, **params):
     fig.supxlabel(_get_caption(**params))
 
     plt.show()
+
+
+def plot_particles(particles: List[ipomdp_solver.Particle], model: universe.Universe):
+    """
+    Plots the particles in the list. This creates n_agents subplots, each depicting the
+    state of the corresponding agent. The horizontal axes show the age of the
+    civilisations and the vertical axis corresponds to the visibility factor.
+
+    If particles have weights, they are visually represented by the size of the points.
+
+    If the model uses sigmoid growth for agents, the horizontal axis corresponds to
+    time until takeoff (takeoff_time - age) as this is what determines technology
+    levels.
+    """
+
+    n_agents = particles[0].state.shape[0]
+    fig, axs = plt.subplots(
+        nrows=1, ncols=n_agents, constrained_layout=True, figsize=(n_agents * 4, 4)
+    )
+
+    states = np.stack(tuple(p.state for p in particles), axis=0)
+    weights = tuple(p.weight for p in particles)
+
+    show_weights = sum(p.weight is None for p in particles) == 0
+
+    if model.agent_growth == growth.sigmoid_growth:
+        x_vals = growth.tech_level(state=states, model=model)
+        # x_vals = states[..., 0] - states[..., 3]
+        y_vals = states[..., 1]
+
+    else:
+        raise NotImplementedError()
+
+    for ag_id, ax in enumerate(axs):
+        ag_x = x_vals[:, ag_id]
+        ag_y = y_vals[:, ag_id]
+
+        # add some noise
+        # ag_x += model.rng.uniform(low=-0.5, high=0.5, size=len(ag_x))
+        ag_y += model.rng.uniform(low=-0.01, high=0.01, size=len(ag_y))
+
+        if show_weights:
+            min_size, max_size = 1, 40
+            if max(weights) == 0:
+                point_sizes = (min_size,) * len(particles)
+            else:
+                point_sizes = tuple(
+                    min_size + (max_size - min_size) / max(weights) * w for w in weights
+                )
+            ax.scatter(
+                x=ag_x,
+                y=ag_y,
+                s=point_sizes,
+                c=tuple(
+                    "red" if w == 0 else ("blue" if w > 1e-6 else "green")
+                    for w in weights
+                ),
+            )
+        else:
+            ax.scatter(x=ag_x, y=ag_y)
+
+        ax.set_xlim(0 - 0.02, 1 + 0.02)
+        ax.set_ylim(y_vals.min() - 0.02, y_vals.max() + 0.02)
+        ax.set_title(f"Agent {ag_id}")
+        ax.grid()
+
+    fig.supxlabel(
+        "Technology level" if model.agent_growth == growth.sigmoid_growth else "Age"
+    )
+    fig.supylabel("Visibility factor")
+    fig.suptitle("Particle states")
+
+    plt.show()
+
+
+def plot_particles_n2(
+    particles: List[ipomdp_solver.Particle], model: universe.Universe
+):
+    """
+    Plots the particles in the list. This creates n_agents subplots, each depicting the
+    state of the corresponding agent. The horizontal axes show the age of the
+    civilisations and the vertical axis corresponds to the visibility factor.
+
+    If particles have weights, they are visually represented by the size of the points.
+
+    If the model uses sigmoid growth for agents, the horizontal axis corresponds to
+    time until takeoff (takeoff_time - age) as this is what determines technology
+    levels.
+    """
+
+    n_agents = particles[0].state.shape[0]
+
+    assert n_agents == 2
+
+    fig, ax = plt.subplots(constrained_layout=True, figsize=(4, 4))
+
+    states = np.stack(tuple(p.state for p in particles), axis=0)
+    weights = tuple(p.weight for p in particles)
+
+    show_weights = sum(p.weight is None for p in particles) == 0
+
+    tech_levels = growth.tech_level(state=states, model=model)
+    x_vals = tech_levels[:, 0]
+    y_vals = tech_levels[:, 1]
+
+    if show_weights:
+        min_size, max_size = 1, 40
+        if max(weights) == 0:
+            point_sizes = (min_size,) * len(particles)
+        else:
+            point_sizes = tuple(
+                min_size + (max_size - min_size) / max(weights) * w for w in weights
+            )
+        ax.scatter(
+            x=x_vals,
+            y=y_vals,
+            s=point_sizes,
+            c=tuple(
+                "red" if w == 0 else ("blue" if w > 1e-6 else "green") for w in weights
+            ),
+        )
+    else:
+        ax.scatter(x=x_vals, y=y_vals)
+
+    ax.set_xlim(0 - 0.02, 1 + 0.02)
+    ax.set_ylim(0 - 0.02, 1 + 0.02)
+    ax.set_title(f"Particle states")
+    ax.set_xlabel("Technology level of agent 0")
+    ax.set_ylabel("Technology level of agent 1")
+    ax.grid()
+
+    plt.show()
+
+
+def plot_tree_particle_counts(
+    tree: ipomdp_solver.Tree,
+    ax: plt.Axes = None,
+    show_individual_counts=True,
+    summary_metrics=["avg", "max"],
+    label: str = "",
+    color=None,
+):
+    """
+    Plot particle counts in the different nodes of the tree.
+    Horizontal axis shows node depth while vertical axis displays the
+    number of particles as
+    i) individual node counts and
+    ii) average at that depth
+    """
+    create_new_axes = ax is None
+    if create_new_axes:
+        fig, ax = plt.subplots(constrained_layout=True)
+
+    # count
+    counts_by_depth = analyse.count_particles_by_depth(tree=tree)
+
+    if show_individual_counts:
+        # represent as x and y
+        x = [depth for depth in counts_by_depth for _ in counts_by_depth[depth]]
+        y = [n for depth in counts_by_depth for n in counts_by_depth[depth]]
+
+        # plot all values
+        sctr = ax.scatter(x=x, y=y, marker="_", color=color)
+
+    if "avg" in summary_metrics:
+        # calculate the average for every depth
+        x_avg = [depth for depth in counts_by_depth]
+        y_avg = [np.mean(counts_by_depth[depth]) for depth in counts_by_depth]
+
+        color = sctr.get_facecolor() if show_individual_counts else color
+        avg_line = ax.plot(x_avg, y_avg, label=f"average ({label})", color=color)
+
+    if "max" in summary_metrics:
+        # calculate the max for every depth
+        x_max = [depth for depth in counts_by_depth]
+        y_max = [np.max(counts_by_depth[depth]) for depth in counts_by_depth]
+
+        color = avg_line[0].get_color() if "avg" in summary_metrics else color
+        ax.plot(
+            x_max, y_max, label=f"maximum ({label})", color=color, linestyle="dashed"
+        )
+
+    ax.set_xlabel("Node depth")
+    ax.set_ylabel("Number of particles")
+    ax.set_title("Numbers of particles in nodes")
+    ax.set_yscale("symlog")
+    ax.grid(visible=True)
+    ax.legend()
+
+    if create_new_axes:
+        plt.show()
+
+
+def plot_tree_fraction_nodes_searched(
+    tree: ipomdp_solver.Tree,
+    ax: plt.Axes = None,
+    label: str = "",
+):
+    """
+    Plot fraction of nodes explored at each depth.
+    Horizontal axis shows node depth while vertical axis displays the fraction.
+    """
+    create_new_axes = ax is None
+    if create_new_axes:
+        fig, ax = plt.subplots(constrained_layout=True)
+
+    # count
+    counts_by_depth = analyse.count_particles_by_depth(tree=tree)
+
+    # number of nodes at each depth
+    depths = [depth for depth in counts_by_depth]
+    n_nodes = [len(counts_by_depth[depth]) for depth in counts_by_depth]
+
+    # fraction of nodes explored
+    n_actions = len(tree.agent.possible_actions())
+    frac_nodes = [n / (n_actions + 1) ** depth for n, depth in zip(n_nodes, depths)]
+
+    # plot
+    ax.plot(depths, frac_nodes, label=label)
+
+    ax.set_xlabel("Node depth")
+    ax.set_ylabel("Fraction of nodes explored")
+    ax.set_title("Fraction of nodes explored")
+    ax.update_datalim([(0, 0)])
+    ax.legend()
+    ax.grid(visible=True)
+
+    if create_new_axes:
+        plt.show()
+
+
+def plot_fraction_successful_lower_tree_queries(
+    data: pd.DataFrame,
+    ax: plt.Axes = None,
+    label: str = "x",
+    title: str = "Success rate for queries to lower trees",
+):
+    """
+    Plots the fraction of successful queries to the tree
+
+    Keyword arguments:
+    data: A Pandas data frame with the following columns:
+            - x
+            - n_queries
+            - prop_successful
+            - prop_missing_node
+            - prop_diverged_belief
+            - prop_some_actions_unexpanded
+    ax: The Matplotlib Axes to plot onto
+    label: Label for the 'x' column
+    title: Title of plot
+    """
+
+    create_new_axes = ax is None
+    if create_new_axes:
+        fig, ax = plt.subplots(constrained_layout=True)
+
+    bar_width = 0.5
+    columns = (
+        "prop_successful",
+        "prop_some_actions_unexpanded",
+        "prop_diverged_belief",
+        "prop_missing_node",
+    )
+    colours = ("green", "yellow", "orange", "red")
+    labels = ("successful", "unexpanded actions", "diverged belief", "no node")
+    x_vals = []
+
+    for i, (x, x_group) in enumerate(data.groupby("x")):
+        bar_bottom = 0
+        x_vals.append(x)
+
+        for column, colour in zip(columns, colours):
+            # calculate confidence interval
+            mean, error_margin = analyse.t_confidence_interval(x_group[column])
+
+            # plot bar
+            ax.bar(
+                x=i,
+                height=mean,
+                width=bar_width,
+                bottom=bar_bottom,
+                yerr=None if np.isnan(error_margin) else error_margin,
+                capsize=4,
+                color=colour,
+            )
+
+            # update bar bottom
+            bar_bottom += mean
+
+    # adjust plot
+    ax.set_xticks(ticks=list(range(len(x_vals))), labels=x_vals)
+    ax.set_xlabel(label)
+    ax.set_ylabel("proportion")
+    ax.grid(visible=True)
+    ax.legend(
+        handles=[
+            Patch(facecolor=colour, label=label)
+            for colour, label in zip(colours, labels)
+        ]
+    )
+    ax.set_title(title)
+
+    if create_new_axes:
+        plt.show()

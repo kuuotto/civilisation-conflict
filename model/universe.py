@@ -2,7 +2,7 @@ import mesa
 import numpy as np
 
 from model import civilisation, growth
-from typing import Tuple
+from typing import Tuple, List, Any
 
 
 class Universe(mesa.Model):
@@ -14,14 +14,15 @@ class Universe(mesa.Model):
         rewards,
         n_root_belief_samples,
         n_tree_simulations,
-        n_belief_update_samples,
         n_reinvigoration_particles,
         obs_noise_sd,
+        obs_self_noise_sd,
         reasoning_level,
         action_dist_0,
         discount_factor,
         discount_epsilon,
         exploration_coef,
+        softargmax_coef,
         visibility_multiplier,
         decision_making,
         init_age_belief_range,
@@ -30,6 +31,7 @@ class Universe(mesa.Model):
         init_visibility_range,
         toroidal_space=False,
         debug=False,
+        log_events=True,
         seed=0,
     ) -> None:
         """
@@ -47,12 +49,12 @@ class Universe(mesa.Model):
                                representing beliefs at root nodes of trees
         n_tree_simulations: the number of simulations to perform on each tree \
                             when planning
-        n_belief_update_samples: number of samples to do when updating \
-                                 beliefs of lower level trees
         n_reinvigoration_particles: number of additional particles to create \
                                     for each tree when updating beliefs
         obs_noise_sd: standard deviation of technosignature observation noise \
                       (which follows an unbiased normal distribution)
+        obs_self_noise_sd: standard deviation of own technosignature observation noise \
+                           (which follows an unbiased normal distribution)
         reasoning_level: the level of ipomdp reasoning all civilisations use \
         action_dist_0: the default action distribution at level 0. Level 0 \
                        trees use this to determine the actions of others when \
@@ -66,6 +68,11 @@ class Universe(mesa.Model):
         exploration_coef: used in the MCTS (Monte Carlo Tree Search) based \
                           algorithm to adjust how much exploration of seldomly\
                           visited agent actions is emphasised
+        softargmax_coef: the coefficient used in softargmax. A lower value means \
+                         higher-quality actions are weighted more strongly, whereas \
+                         a higher value means actions are chosen more uniformly and \
+                         less based on the qualities of actions. Analogous to the \
+                         Boltzmann constant k in the Boltzmann distribution.
         visibility_multiplier: how much a single “hide” action multiplies the \
                                current agent visibility factor by
         decision_making: the method used by agents to make decisions. Options \
@@ -82,6 +89,7 @@ class Universe(mesa.Model):
                                Typically (1, 1)
         toroidal_space: whether to use a toroidal universe topology
         debug: whether to print detailed debug information while model is run
+        log_events: whether to keep a log of model events
         seed: seed of the random number generator. Fixing the seed allows \
               for reproducibility of results.
         """
@@ -92,14 +100,15 @@ class Universe(mesa.Model):
         self.rewards = rewards
         self.n_root_belief_samples = n_root_belief_samples
         self.n_tree_simulations = n_tree_simulations
-        self.n_belief_update_samples = n_belief_update_samples
         self.n_reinvigoration_particles = n_reinvigoration_particles
         self.obs_noise_sd = obs_noise_sd
+        self.obs_self_noise_sd = obs_self_noise_sd
         self.reasoning_level = reasoning_level
         self.action_dist_0 = action_dist_0
         self.discount_factor = discount_factor
         self.discount_epsilon = discount_epsilon
         self.exploration_coef = exploration_coef
+        self.softargmax_coef = softargmax_coef
         self.visibility_multiplier = visibility_multiplier
         self.decision_making = decision_making
         self.init_age_belief_range = init_age_belief_range
@@ -107,6 +116,12 @@ class Universe(mesa.Model):
         self.init_visibility_belief_range = init_visibility_belief_range
         self.init_visibility_range = init_visibility_range
         self.debug = debug
+        self.log_events = log_events
+
+        if self.agent_growth == growth.sigmoid_growth:
+            self.agent_state_size = 4
+        else:
+            raise NotImplementedError
 
         # initialise random number generator
         self.rng = np.random.default_rng(seed)
@@ -122,7 +137,7 @@ class Universe(mesa.Model):
         # keep a list of agents in the model. The schedule also keeps a list,
         # but it is re-generated every time it is accessed which is not very
         # efficient
-        self.agents = []
+        self.agents: List[civilisation.Civilisation] = []
 
         # add agents
         for id in range(n_agents):
@@ -166,10 +181,18 @@ class Universe(mesa.Model):
             x, y = self.rng.random(size=2)
             self.space.place_agent(agent, (x, y))
 
+        # initialise distance cache
+        self._init_distance_cache()
+
+        # initialise model state
+        self._init_state()
+
+        # initialise constants used
+        self._init_constants()
+
         # after all agents have been created, initialise their trees
         for agent in self.agents:
             agent.initialise_forest()
-            agent._init_action_set()
 
         # initialise data collection
         self.datacollector = mesa.DataCollector(
@@ -190,19 +213,55 @@ class Universe(mesa.Model):
             },
         )
 
-        # initialise model state
-        self._init_state()
-
-        # initialise distance cache
-        self._init_distance_cache()
-
         # keep track of the last action
         self.previous_action = None
+
+        # initialise a log for events
+        self.log = []
 
     def step(self):
         """Advance the model by one step."""
         self.datacollector.collect(self)
         self.schedule.step()
+
+    def add_log_event(self, event_type: int, event_data: Any) -> None:
+        # printing settings
+        debug_print_warnings = self.debug >= 1
+        debug_print_info = self.debug >= 2
+
+        # add event to log
+        if self.log_events:
+            self.log.append(LogEvent(event_type=event_type, event_data=event_data))
+
+        # code 10 means prediction of others' action when simulating a tree was successful
+
+        if event_type == 11 and debug_print_info:
+            print(
+                f"Could not find a matching node in child tree when simulating {event_data}"
+            )
+        elif event_type == 12 and debug_print_info:
+            print(f"Belief in lower tree has diverged when simulating {event_data}")
+        elif event_type == 13 and debug_print_info:
+            print(
+                f"All actions in lower node have not been expanded when simulating {event_data}"
+            )
+        elif event_type == 21 and debug_print_info:
+            print(
+                f"Lower node belief update {event_data[0]} : {event_data[1]}",
+                f"-> {event_data[2]} : {event_data[3]} saw beliefs diverge",
+            )
+        elif event_type == 22 and debug_print_info:
+            print(
+                f"Lower node belief update {event_data[0]} : {event_data[1]}",
+                f"-> {event_data[2]} : {event_data[3]} could not find the node in",
+                "the lower tree. An empty node was created.",
+            )
+        elif event_type == 22 and debug_print_info:
+            print(
+                f"Lower node belief update {event_data[0]} : {event_data[1]}",
+                f"-> {event_data[2]} : {event_data[3]} found an empty node in",
+                "the lower tree.",
+            )
 
     def _init_state(self):
         """Initialise model state"""
@@ -224,6 +283,12 @@ class Universe(mesa.Model):
 
         return self._state
 
+    def _init_constants(self) -> None:
+        """
+        Pre-calculates some constants used in the I-POMDP solver.
+        """
+        # self.obs_prob_const = ipomdp._norm_pdf(x=0, mean=0, sd=self.obs_noise_sd)
+
     def _init_distance_cache(self) -> None:
         """
         Calculates distances between all agents and stores these. This is used
@@ -244,32 +309,57 @@ class Universe(mesa.Model):
                 self._distances[i, j] = distance
                 self._distances[j, i] = distance
 
+        # stores distances as equivalent technology levels -- using these means that
+        # influence radii do not have to be calculated during the simulations
+        self._distances_tech_level = growth.inv_influence_radius(self._distances)
+
     def get_agent_neighbours(
-        self, agent: civilisation.Civilisation, radius: float
+        self,
+        agent: civilisation.Civilisation,
+        radius: float = None,
+        tech_level: float = None,
     ) -> Tuple[civilisation.Civilisation]:
         """
-        Find neighbours of agent given a radius.
+        Find neighbours of agent given a radius or a technology level.
+
+        If both a radius and a technology level are supplied, the former takes precedence.
 
         This is more efficient than the method of the mesa space module,
         because this uses the pre-generated array of agent distances. We can
         do this because agents do not move in our model.
         """
-        return tuple(
-            ag
-            for ag in self.agents
-            if self._distances[agent.id, ag.id] < radius and ag != agent
-        )
+        if radius is not None:
+            return tuple(
+                ag
+                for ag in self.agents
+                if self._distances[agent.id, ag.id] < radius and ag != agent
+            )
+        elif tech_level is not None:
+            return tuple(
+                ag
+                for ag in self.agents
+                if self._distances_tech_level[agent.id, ag.id] < tech_level
+                and ag != agent
+            )
+
+        raise Exception("Either a radius or a technology level must be supplied.")
 
     def is_neighbour(
         self,
         agent1: civilisation.Civilisation,
         agent2: civilisation.Civilisation,
-        radius: float,
+        radius: float = None,
+        tech_level: float = None,
     ) -> bool:
         """
         Checks if distance between the agents is less than radius.
         """
-        return self._distances[agent1.id, agent2.id] < radius
+        if radius is not None:
+            return self._distances[agent1.id, agent2.id] < radius
+        if tech_level is not None:
+            return self._distances_tech_level[agent1.id, agent2.id] < tech_level
+
+        raise Exception("Either a radius or a technology level must be supplied.")
 
 
 class SingleActivation(mesa.time.BaseScheduler):
@@ -324,3 +414,12 @@ class SingleActivation(mesa.time.BaseScheduler):
         # increase time
         self.time += 1
         self.steps += 1
+
+
+class LogEvent(object):
+    def __init__(self, event_type: int, event_data: Any):
+        self.event_type = event_type
+        self.event_data = event_data
+
+    def __repr__(self):
+        return f"({self.event_type}, {self.event_data})"

@@ -45,11 +45,18 @@ class Civilisation(mesa.Agent):
         # save ipomdp reasoning level
         self.level = reasoning_level
 
+        # agent state will be initialised elsewhere
+        self._state = None
+
         # initialise own tech level
         self.step_tech_level()
 
         # keep track of previous action
         self.previous_agent_action = action.NO_TURN
+
+        # store the set of possible actions for this agent (will be determined once
+        # it is requested)
+        self._action_set = None
 
     def initialise_forest(self):
         """Create belief trees"""
@@ -67,15 +74,16 @@ class Civilisation(mesa.Agent):
         constrain the actions to only those that the agent is currently
         capable of.
         """
+        if self._action_set is None:
+            self._init_action_set()
+
         if state is None:
             return self._action_set
 
-        agent_influence_rad = growth.influence_radius(
-            growth.tech_level(state=state[self.id], model=self.model)
-        )
+        agent_tech_level = growth.tech_level(state=state[self.id], model=self.model)
 
         return (action.NO_ACTION, action.HIDE) + self.model.get_agent_neighbours(
-            agent=self, radius=agent_influence_rad
+            agent=self, tech_level=agent_tech_level
         )
 
     def step_tech_level(self):
@@ -188,7 +196,7 @@ class Civilisation(mesa.Agent):
                     "time": self.model.schedule.time,
                     "actor": self.id,
                     "action": "a",
-                    "attack_target": self.id,
+                    "attack_target": target.id,
                     "attack_successful": result,
                 },
             )
@@ -227,19 +235,12 @@ class Civilisation(mesa.Agent):
             raise Exception("Unrecognised action")
 
         self.previous_agent_action = agent_action
-        self.model.previous_action = {self: agent_action}
+        self.model.previous_action = (self, agent_action)
 
     def dprint(self, *message):
         """Prints message to the console if debugging flag is on"""
         if self.model.debug:
             print(f"t={self.model.schedule.time}, {self.unique_id}:", *message)
-
-    def _init_state(self):
-        """Initialises the state array"""
-        if self.model.agent_growth == growth.sigmoid_growth:
-            self._state = np.zeros(4)
-        else:
-            raise NotImplementedError()
 
     def get_state(self):
         """
@@ -254,8 +255,8 @@ class Civilisation(mesa.Agent):
         The last two are related to the specific growth model assumed, and
         will therefore be different with different growth types
         """
-        if not hasattr(self, "_state"):
-            self._init_state()
+        if self._state is None:
+            self._state = np.zeros(self.model.agent_state_size)
 
         if self.model.agent_growth == growth.sigmoid_growth:
             self._state[0] = self.model.schedule.time - self.reset_time
