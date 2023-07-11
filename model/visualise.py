@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
+from matplotlib.patches import Circle, Patch
 from matplotlib.animation import ArtistAnimation
 from model import analyse, ipomdp_solver, universe, growth
 from typing import List
@@ -88,34 +88,37 @@ def draw_universe(
         step_data = data.xs(step, level="Step")
 
         ### first draw universal agents (infinite vision)
-        universal_agent_data = step_data[step_data["Radius of Influence"] >= 1]
+        universal_agent_data = step_data[step_data["Radius of Influence"] >= np.sqrt(2)]
         ids = universal_agent_data.index.get_level_values("AgentID")
         positions = universal_agent_data["Position"]
         x = [pos[0] for pos in positions]
         y = [pos[1] for pos in positions]
         colors = [colormap(id % 5) for id in ids]
         facecolors = [
-            c[:3] + (v,)
+            c[:3] + (v,)  # add transparency to color depending on visibility factor
             for c, v in zip(colors, universal_agent_data["Visibility Factor"])
         ]
 
+        # draw symbols
         paths = ax.scatter(
             x, y, edgecolors=colors, s=50, marker="d", facecolor=facecolors
         )
         step_artists.append(paths)
 
         ### draw other agents, showing their radius of influence
-        normal_agent_data = step_data[step_data["Radius of Influence"] < 1]
+        normal_agent_data = step_data[step_data["Radius of Influence"] < np.sqrt(2)]
         ids = normal_agent_data.index.get_level_values("AgentID")
         positions = normal_agent_data["Position"]
         x = [pos[0] for pos in positions]
         y = [pos[1] for pos in positions]
         colors = [colormap(id % 5) for id in ids]
         facecolors = [
-            c[:3] + (v,) for c, v in zip(colors, normal_agent_data["Visibility Factor"])
+            c[:3] + (v,)  # add transparency to color depending on visibility factor
+            for c, v in zip(colors, normal_agent_data["Visibility Factor"])
         ]
         influence_radii = normal_agent_data["Radius of Influence"]
 
+        # draw symbols
         paths = ax.scatter(x, y, edgecolors=colors, facecolors=facecolors, s=20)
         step_artists.append(paths)
 
@@ -155,6 +158,11 @@ def draw_universe(
                 a_x, a_y = actor_pos
                 t_x, t_y = step_data.loc[target_id].Position.values[0]
 
+                # whether target was within the radius of influence of the attacker
+                attack_possible = not np.isnan(
+                    step_action_data["attack_successful"].iat[0]
+                )
+
                 arrow = ax.arrow(
                     x=a_x,
                     y=a_y,
@@ -164,6 +172,7 @@ def draw_universe(
                     width=0.005,
                     head_width=0.03,
                     head_length=0.03,
+                    ls="solid" if attack_possible else "dashed",
                     color="white",
                 )
                 step_artists.append(arrow)
@@ -558,79 +567,76 @@ def plot_tree_fraction_nodes_searched(
 
 
 def plot_fraction_successful_lower_tree_queries(
-    model: universe.Universe,
+    data: pd.DataFrame,
     ax: plt.Axes = None,
-    label: str = "0",
-    x: int = 0,
+    label: str = "x",
+    title: str = "Success rate for queries to lower trees",
 ):
+    """
+    Plots the fraction of successful queries to the tree
+
+    Keyword arguments:
+    data: A Pandas data frame with the following columns:
+            - x
+            - n_queries
+            - prop_successful
+            - prop_missing_node
+            - prop_diverged_belief
+            - prop_some_actions_unexpanded
+    ax: The Matplotlib Axes to plot onto
+    label: Label for the 'x' column
+    title: Title of plot
+    """
+
     create_new_axes = ax is None
     if create_new_axes:
         fig, ax = plt.subplots(constrained_layout=True)
 
-    # count proportions
-    n_queries = len(
-        [event for event in model.log if event.event_type in (10, 11, 12, 13)]
-    )
-    prop_successful = (
-        len([event for event in model.log if event.event_type == 10]) / n_queries
-    )
-    prop_missing_node = (
-        len([event for event in model.log if event.event_type == 11]) / n_queries
-    )
-    prop_diverged_belief = (
-        len([event for event in model.log if event.event_type == 12]) / n_queries
-    )
-    prop_some_actions_unexpanded = (
-        len([event for event in model.log if event.event_type == 13]) / n_queries
-    )
-
     bar_width = 0.5
-
-    bar1 = ax.bar(
-        x=x,
-        bottom=0,
-        height=prop_successful,
-        width=bar_width,
-        color="green",
-        label="successful",
+    columns = (
+        "prop_successful",
+        "prop_some_actions_unexpanded",
+        "prop_diverged_belief",
+        "prop_missing_node",
     )
-    bar2 = ax.bar(
-        x=x,
-        bottom=prop_successful,
-        height=prop_some_actions_unexpanded,
-        width=bar_width,
-        color="yellow",
-        label="unexpanded actions",
-    )
-    bar3 = ax.bar(
-        x=x,
-        bottom=prop_successful + prop_some_actions_unexpanded,
-        height=prop_diverged_belief,
-        width=bar_width,
-        color="orange",
-        label="diverged belief",
-    )
-    bar4 = ax.bar(
-        x=x,
-        bottom=prop_successful + prop_some_actions_unexpanded + prop_diverged_belief,
-        height=prop_missing_node,
-        width=bar_width,
-        color="red",
-        label="no node",
-    )
+    colours = ("green", "yellow", "orange", "red")
+    labels = ("successful", "unexpanded actions", "diverged belief", "no node")
+    x_vals = []
 
-    # set labels
-    if create_new_axes:
-        ticks, labels = [], []
-    else:
-        ticks, labels = ax.get_xticks(), ax.get_xticklabels()
+    for i, (x, x_group) in enumerate(data.groupby("x")):
+        bar_bottom = 0
+        x_vals.append(x)
 
-    ticks = list(ticks) + [x]
-    labels += [label]
-    ax.set_xticks(ticks, labels)
+        for column, colour in zip(columns, colours):
+            # calculate confidence interval
+            mean, error_margin = analyse.t_confidence_interval(x_group[column])
 
+            # plot bar
+            ax.bar(
+                x=i,
+                height=mean,
+                width=bar_width,
+                bottom=bar_bottom,
+                yerr=None if np.isnan(error_margin) else error_margin,
+                capsize=4,
+                color=colour,
+            )
+
+            # update bar bottom
+            bar_bottom += mean
+
+    # adjust plot
+    ax.set_xticks(ticks=list(range(len(x_vals))), labels=x_vals)
+    ax.set_xlabel(label)
+    ax.set_ylabel("proportion")
     ax.grid(visible=True)
-    ax.legend(handles=[bar1, bar2, bar3, bar4])
+    ax.legend(
+        handles=[
+            Patch(facecolor=colour, label=label)
+            for colour, label in zip(colours, labels)
+        ]
+    )
+    ax.set_title(title)
 
     if create_new_axes:
         plt.show()
