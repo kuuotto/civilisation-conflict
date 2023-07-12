@@ -978,7 +978,7 @@ class Node:
             shape=(self.array_size, model.n_agents, model.agent_state_size)
         )
         # - number of times a particle has been expanded
-        self._n_expansions = np.zeros(shape=(self.array_size,), dtype=np.int_)
+        self._n_expansions = np.zeros(shape=(self.array_size,), dtype=np.int32)
         # - number of times a particle has been expanded with each action
         self._n_expansions_act = np.zeros(
             shape=(self.array_size, self.n_actions), dtype=np.int32
