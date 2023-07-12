@@ -640,7 +640,6 @@ class Tree:
 
             # if node is not found, choose random action
             if lower_node is None:
-                # TODO: Improve logged data in this method
                 model.add_log_event(event_type=11, event_data=self.signature)
                 choose_random_action = True
 
@@ -740,11 +739,9 @@ class Tree:
 
                 if lower_node is None:
                     # couldn't find lower node
-                    # TODO: log event
-                    if model.debug == 2:
-                        print(
-                            "Could not resample node in child tree (node doesn't exist)"
-                        )
+                    model.add_log_event(
+                        event_type=31, event_data=(self.signature, other_agent)
+                    )
                     continue
 
                 lower_node.resample_particles()
@@ -756,11 +753,9 @@ class Tree:
 
                 if next_lower_node is None:
                     # there is no node, so we cannot create beliefs
-                    # TODO: log event
-                    if model.debug == 2:
-                        print(
-                            "Could not create belief in child tree (node doesn't exist)"
-                        )
+                    model.add_log_event(
+                        event_type=32, event_data=(self.signature, other_agent)
+                    )
                     continue
 
                 # generate observation
@@ -773,6 +768,11 @@ class Tree:
 
                 # assign weights to particles
                 next_lower_node.weight_particles(other_agent_obs)
+
+                # log successful creation of lower node belief
+                model.add_log_event(
+                    event_type=30, event_data=(self.signature, other_agent)
+                )
 
         ### 5. Repeat
 

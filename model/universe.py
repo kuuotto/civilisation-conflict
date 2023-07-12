@@ -225,13 +225,24 @@ class Universe(mesa.Model):
         self.schedule.step()
 
     def add_log_event(self, event_type: int, event_data: Any) -> None:
+        """
+        Codes 1x: Determining others' action during a simulation
+        Codes 2x: Lower node belief update
+        Codes 3x: Updating beliefs during a simulation
+        """
         # printing settings
         debug_print_warnings = self.debug >= 1
         debug_print_info = self.debug >= 2
 
         # add event to log
         if self.log_events:
-            self.log.append(LogEvent(event_type=event_type, event_data=event_data))
+            self.log.append(
+                LogEvent(
+                    event_type=event_type,
+                    event_data=tuple(str(d).strip("()") for d in event_data),
+                    event_time=self.schedule.time,
+                )
+            )
 
         # code 10 means prediction of others' action when simulating a tree was successful
 
@@ -261,6 +272,18 @@ class Universe(mesa.Model):
                 f"Lower node belief update {event_data[0]} : {event_data[1]}",
                 f"-> {event_data[2]} : {event_data[3]} found an empty node in",
                 "the lower tree.",
+            )
+        elif event_type == 31 and debug_print_info:
+            print(
+                "Could not create a belief in the next lower node of agent",
+                f"{event_data[1]} when simulating tree {event_data[0]} because",
+                "its parent does not exist.",
+            )
+        elif event_type == 32 and debug_print_info:
+            print(
+                "Could not create a belief in the next lower node of agent",
+                f"{event_data[1]} when simulating tree {event_data[0]} because",
+                "it does not exist.",
             )
 
     def _init_state(self):
@@ -417,9 +440,10 @@ class SingleActivation(mesa.time.BaseScheduler):
 
 
 class LogEvent(object):
-    def __init__(self, event_type: int, event_data: Any):
+    def __init__(self, event_type: int, event_data: Any, event_time: int):
         self.event_type = event_type
         self.event_data = event_data
+        self.event_time = event_time
 
     def __repr__(self):
-        return f"({self.event_type}, {self.event_data})"
+        return f"Event(t={self.event_time}: {self.event_type}, {self.event_data})"
