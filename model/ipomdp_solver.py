@@ -265,7 +265,7 @@ class BeliefForest:
         new_root_node.weight_particles(owner_observation)
 
         # check that the weights do not sum to 0
-        if len(self.top_level_tree_root_node.belief) == 0:
+        if new_root_node.belief.max() == 0:
             raise Exception(
                 "The weights of the particles in the top-level tree root node are all 0"
             )
