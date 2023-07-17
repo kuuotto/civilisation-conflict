@@ -33,6 +33,7 @@ class Universe(mesa.Model):
         debug=False,
         log_events=True,
         seed=0,
+        ignore_exceptions=False,
     ) -> None:
         """
         Initialise a new Universe model.
@@ -91,6 +92,8 @@ class Universe(mesa.Model):
         log_events: whether to keep a log of model events
         seed: seed of the random number generator. Fixing the seed allows \
               for reproducibility of results.
+        ignore_exceptions: whether to ignore exceptions (and instead just stop
+                           running)
         """
         # save parameters
         self.n_agents = n_agents
@@ -115,6 +118,7 @@ class Universe(mesa.Model):
         self.init_visibility_range = init_visibility_range
         self.debug = debug
         self.log_events = log_events
+        self.ignore_exceptions = ignore_exceptions
 
         if agent_growth == "sigmoid":
             self.agent_growth = growth.sigmoid_growth
@@ -223,8 +227,19 @@ class Universe(mesa.Model):
 
     def step(self):
         """Advance the model by one step."""
-        self.datacollector.collect(self)
-        self.schedule.step()
+        if not self.running:
+            return
+
+        try:
+            self.datacollector.collect(self)
+            self.schedule.step()
+        except Exception as e:
+            if self.ignore_exceptions:
+                print("Stopping due to:", e)
+                self.running = False
+                return
+
+            raise e
 
     def add_log_event(self, event_type: int, event_data: Any) -> None:
         """
