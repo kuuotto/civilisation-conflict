@@ -1,11 +1,11 @@
 # %%
-from model import universe, growth
+from model import universe
 
 
 def create_small_universe(**kwargs):
     params = {
         "n_agents": 3,
-        "agent_growth": growth.sigmoid_growth,
+        "agent_growth": "sigmoid",
         "agent_growth_params": {
             "speed_range": (0.3, 1),
             "takeoff_time_range": (10, 100),
@@ -24,7 +24,7 @@ def create_small_universe(**kwargs):
         "discount_factor": 0.9,
         "discount_epsilon": 0.05,
         "exploration_coef": 1,
-        "softargmax_coef": 1/10,
+        "softargmax_coef": 1 / 10,
         "visibility_multiplier": 0.5,
         "decision_making": "ipomdp",
         "init_age_belief_range": (10, 100),

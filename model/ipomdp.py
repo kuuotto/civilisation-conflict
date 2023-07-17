@@ -492,14 +492,8 @@ def sample_init(
     """
     n_agents = model.n_agents
 
-    # determine the number of values needed to describe an agent
-    if model.agent_growth == growth.sigmoid_growth:
-        k = 4
-    else:
-        raise NotImplementedError()
-
     # initialise array of samples
-    sample = np.zeros((n_samples, n_agents, k))
+    sample = np.zeros((n_samples, n_agents, model.agent_state_size))
     size = (n_samples, n_agents)
 
     # initial age distribution

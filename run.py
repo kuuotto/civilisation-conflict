@@ -1,6 +1,6 @@
 # %%
 import matplotlib.pyplot as plt
-from model import growth, universe, visualise
+from model import universe, visualise
 from tqdm import tqdm
 import pickle
 
@@ -9,7 +9,7 @@ import pickle
 # parameters
 params = {
     "n_agents": 2,
-    "agent_growth": growth.sigmoid_growth,
+    "agent_growth": "sigmoid",
     "agent_growth_params": {
         "speed_range": (0.5, 0.5),
         "takeoff_time_range": (20, 40),

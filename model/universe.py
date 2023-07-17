@@ -39,9 +39,8 @@ class Universe(mesa.Model):
 
         Keyword arguments:
         n_agents: the number of agents in the model
-        agent_growth: the type of growth agents can undergo. A callable which \
-                      accepts a time step and additional keyword arguments \
-                      defined in agent_growth_params.
+        agent_growth: the type of growth agents can undergo. Currently supports \
+                      "sigmoid".
         agent_growth_params: see agent_growth
         rewards: a dictionary of rewards with keys 'destroyed', 'hide' and \
                  'attack' and the rewards as values
@@ -95,7 +94,6 @@ class Universe(mesa.Model):
         """
         # save parameters
         self.n_agents = n_agents
-        self.agent_growth = agent_growth
         self.agent_growth_params = agent_growth_params
         self.rewards = rewards
         self.n_root_belief_samples = n_root_belief_samples
@@ -118,7 +116,8 @@ class Universe(mesa.Model):
         self.debug = debug
         self.log_events = log_events
 
-        if self.agent_growth == growth.sigmoid_growth:
+        if agent_growth == "sigmoid":
+            self.agent_growth = growth.sigmoid_growth
             self.agent_state_size = 4
         else:
             raise NotImplementedError
@@ -149,7 +148,7 @@ class Universe(mesa.Model):
 
             # choose the growth parameters of the civilisation
             if (
-                agent_growth == growth.sigmoid_growth
+                agent_growth == "sigmoid"
                 and "speed_range" in agent_growth_params
                 and "takeoff_time_range" in agent_growth_params
             ):
