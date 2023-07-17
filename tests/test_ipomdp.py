@@ -129,7 +129,7 @@ class TestInitialBelief(unittest.TestCase):
     def test_initial_belief(self):
         model = helpers.create_small_universe(
             n_agents=5,
-            agent_growth=growth.sigmoid_growth,
+            agent_growth="sigmoid",
             agent_growth_params={
                 "speed_range": (0.5, 1),
                 "takeoff_time_range": (10, 20),
@@ -586,7 +586,7 @@ class TestReward(unittest.TestCase):
         mdl = helpers.create_small_universe(
             n_agents=2,
             rewards={"destroyed": -1, "hide": -0.01, "attack": -0.1},
-            agent_growth=growth.sigmoid_growth,
+            agent_growth="sigmoid",
         )
 
         strong, weak = mdl.agents

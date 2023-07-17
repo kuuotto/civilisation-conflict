@@ -1,7 +1,7 @@
 import unittest
 
 import numpy as np
-from model import growth, ipomdp_solver, action
+from model import ipomdp_solver
 from tests import helpers
 import random
 import math
@@ -74,7 +74,7 @@ class TestSolverInitialState(unittest.TestCase):
         model = helpers.create_small_universe(
             n_agents=2,
             reasoning_level=2,
-            agent_growth=growth.sigmoid_growth,
+            agent_growth="sigmoid",
             n_root_belief_samples=5,
         )
         a0, a1 = model.agents
