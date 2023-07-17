@@ -219,6 +219,9 @@ class Universe(mesa.Model):
         # initialise a log for events
         self.log = []
 
+        # run indefinitely (this is used by mesa.batch_run)
+        self.running = True
+
     def step(self):
         """Advance the model by one step."""
         self.datacollector.collect(self)
