@@ -640,19 +640,19 @@ class Tree:
 
             # if node is not found, choose random action
             if lower_node is None:
-                model.add_log_event(event_type=11, event_data=self.signature)
+                model.add_log_event(event_type=11, event_data=(self.signature,))
                 choose_random_action = True
 
             # check that belief is not diverged
             elif lower_node.belief.sum() == 0:
-                model.add_log_event(event_type=12, event_data=self.signature)
+                model.add_log_event(event_type=12, event_data=(self.signature,))
                 choose_random_action = True
 
             # check that all actions have been expanded
             else:
                 W_a = lower_node.belief @ lower_node.n_expansions_act
                 if 0 in W_a:
-                    model.add_log_event(event_type=13, event_data=self.signature)
+                    model.add_log_event(event_type=13, event_data=(self.signature,))
                     choose_random_action = True
 
             if choose_random_action:
@@ -665,7 +665,7 @@ class Tree:
                 )
 
                 # log successful action prediction
-                model.add_log_event(event_type=10, event_data=self.signature)
+                model.add_log_event(event_type=10, event_data=(self.signature,))
 
         # package action
         action_ = (actor, actor_action)

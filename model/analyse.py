@@ -2,6 +2,7 @@ import numpy as np
 from scipy import stats
 from model import ipomdp_solver, universe
 from typing import Dict, Tuple
+import pandas as pd
 
 
 def count_streaks(data):
@@ -115,7 +116,7 @@ def prop_successful_lower_tree_queries(
             event
             for event in model.log
             if event.event_type in (10, 11, 12, 13)
-            and event.event_data == tree_signature
+            and event.event_data == (str(tree_signature).strip("()"),)
         ]
 
         n_queries = len(tree_events)
