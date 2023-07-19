@@ -6,6 +6,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Patch
 from matplotlib.animation import ArtistAnimation
+from matplotlib.ticker import MultipleLocator
 from model import analyse, ipomdp_solver, universe, growth
 from typing import List
 
@@ -470,7 +471,7 @@ def plot_particles_n2(
 
 
 def plot_tree_particle_counts(
-    tree: ipomdp_solver.Tree,
+    data: pd.DataFrame,  # columns "repetition_id", "depth", "n_particles"
     ax: plt.Axes = None,
     show_individual_counts=True,
     summary_metrics=["avg", "max"],
@@ -483,43 +484,106 @@ def plot_tree_particle_counts(
     number of particles as
     i) individual node counts and
     ii) average at that depth
+    iii) maximum at that depth
     """
     create_new_axes = ax is None
     if create_new_axes:
         fig, ax = plt.subplots(constrained_layout=True)
 
-    # count
-    counts_by_depth = analyse.count_particles_by_depth(tree=tree)
+    n_repetitions = len(data["repetition_id"].unique())
 
     if show_individual_counts:
-        # represent as x and y
-        x = [depth for depth in counts_by_depth for _ in counts_by_depth[depth]]
-        y = [n for depth in counts_by_depth for n in counts_by_depth[depth]]
-
         # plot all values
-        sctr = ax.scatter(x=x, y=y, marker="_", color=color)
+        sctr = ax.scatter(
+            x="depth",
+            y="n_particles",
+            data=data,
+            marker="_",
+            color=color,
+            label="node particle count",
+        )
 
     if "avg" in summary_metrics:
         # calculate the average for every depth
-        x_avg = [depth for depth in counts_by_depth]
-        y_avg = [np.mean(counts_by_depth[depth]) for depth in counts_by_depth]
+        avg_count = (
+            data.groupby(["repetition_id", "depth"])
+            .mean()
+            .groupby("depth")
+            .mean()
+            .iloc[:, 0]
+        )
 
         color = sctr.get_facecolor() if show_individual_counts else color
-        avg_line = ax.plot(x_avg, y_avg, label=f"average ({label})", color=color)
+
+        avg_line = ax.plot(
+            avg_count,
+            label=f"average ({label})",
+            color=color,
+        )
+
+        # add error bars if applicable
+        if n_repetitions > 1:
+            # determine error margins
+            mean_error_margins = (
+                data.groupby(["repetition_id", "depth"])
+                .mean()
+                .groupby("depth")
+                .aggregate(lambda x: analyse.t_confidence_interval(x)[1])
+                .iloc[:, 0]
+            )
+
+            ax.errorbar(
+                x=mean_error_margins.index,
+                y=avg_count,
+                yerr=mean_error_margins,
+                fmt="none",
+                ecolor="red" if show_individual_counts else avg_line[0].get_color(),
+                capsize=3,
+            )
 
     if "max" in summary_metrics:
         # calculate the max for every depth
-        x_max = [depth for depth in counts_by_depth]
-        y_max = [np.max(counts_by_depth[depth]) for depth in counts_by_depth]
-
-        color = avg_line[0].get_color() if "avg" in summary_metrics else color
-        ax.plot(
-            x_max, y_max, label=f"maximum ({label})", color=color, linestyle="dashed"
+        max_count = (
+            data.groupby(["repetition_id", "depth"])
+            .max()
+            .groupby("depth")
+            .mean()
+            .iloc[:, 0]
         )
 
+        color = avg_line[0].get_color() if "avg" in summary_metrics else color
+
+        max_line = ax.plot(
+            max_count,
+            label=f"maximum ({label})",
+            color=color,
+            linestyle="dashed",
+        )
+
+        # add error bars if applicable
+        if n_repetitions > 1:
+            # determine error margins
+            max_error_margins = (
+                data.groupby(["repetition_id", "depth"])
+                .max()
+                .groupby("depth")
+                .aggregate(lambda x: analyse.t_confidence_interval(x)[1])
+                .iloc[:, 0]
+            )
+
+            ax.errorbar(
+                x=max_error_margins.index,
+                y=max_count,
+                yerr=max_error_margins,
+                fmt="none",
+                ecolor="red" if show_individual_counts else max_line[0].get_color(),
+                capsize=3,
+            )
+
+    ax.xaxis.set_major_locator(MultipleLocator(1))
     ax.set_xlabel("Node depth")
     ax.set_ylabel("Number of particles")
-    ax.set_title("Numbers of particles in nodes")
+    ax.set_title(f"Numbers of particles in nodes")
     ax.set_yscale("symlog")
     ax.grid(visible=True)
     ax.legend()
@@ -529,7 +593,8 @@ def plot_tree_particle_counts(
 
 
 def plot_tree_fraction_nodes_searched(
-    tree: ipomdp_solver.Tree,
+    data: pd.DataFrame,  # columns "repetition_id", "depth", "n_particles"
+    n_possible_actions: int,
     ax: plt.Axes = None,
     label: str = "",
 ):
@@ -541,20 +606,41 @@ def plot_tree_fraction_nodes_searched(
     if create_new_axes:
         fig, ax = plt.subplots(constrained_layout=True)
 
-    # count
-    counts_by_depth = analyse.count_particles_by_depth(tree=tree)
+    n_repetitions = len(data["repetition_id"].unique())
 
-    # number of nodes at each depth
-    depths = [depth for depth in counts_by_depth]
-    n_nodes = [len(counts_by_depth[depth]) for depth in counts_by_depth]
+    def calc_frac_nodes(chunk):
+        """Calculates the fraction of nodes explored for a chunk at a given depth"""
+        depth = chunk.index.get_level_values("depth")[0]
+        return chunk / (n_possible_actions + 1) ** depth
 
-    # fraction of nodes explored
-    n_actions = len(tree.agent.possible_actions())
-    frac_nodes = [n / (n_actions + 1) ** depth for n, depth in zip(n_nodes, depths)]
+    # average fraction of nodes searched
+    frac_grouped = (
+        data.groupby(["depth", "repetition_id"])
+        .size()
+        .groupby("depth")
+        .transform(calc_frac_nodes)
+        .groupby("depth")
+    )
+    frac_avg = frac_grouped.mean()
 
     # plot
-    ax.plot(depths, frac_nodes, label=label)
+    frac_line = ax.plot(frac_avg, label=f"{label}")
 
+    if n_repetitions > 1:
+        frac_error_margin = frac_grouped.aggregate(
+            lambda chunk: analyse.t_confidence_interval(chunk)[1]
+        )
+
+        ax.errorbar(
+            x=frac_error_margin.index,
+            y=frac_avg,
+            yerr=frac_error_margin,
+            fmt="none",
+            capsize=3,
+            color=frac_line[0].get_color(),
+        )
+
+    ax.xaxis.set_major_locator(MultipleLocator(1))
     ax.set_xlabel("Node depth")
     ax.set_ylabel("Fraction of nodes explored")
     ax.set_title("Fraction of nodes explored")
