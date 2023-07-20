@@ -134,7 +134,7 @@ class Universe(mesa.Model):
             self,
             update_methods=["step_tech_level", "step_update_beliefs", "step_plan"],
             step_method="step_act",
-            log_methods=["step_log_reward"]
+            log_methods=["step_log_reward", "step_log_estimated_action_qualities"],
         )
         self.space = mesa.space.ContinuousSpace(x_max=1, y_max=1, torus=toroidal_space)
 
@@ -214,11 +214,8 @@ class Universe(mesa.Model):
                     "attack_target",
                     "attack_successful",
                 ],
-                "rewards": [
-                    "time",
-                    "agent",
-                    "reward"
-                ]
+                "rewards": ["time", "agent", "reward"],
+                "action_qualities": ["time", "estimator", "actor", "qualities"],
             },
         )
 
@@ -420,11 +417,11 @@ class SingleActivation(mesa.time.BaseScheduler):
     """
 
     def __init__(
-        self, 
-        model: mesa.Model, 
-        update_methods: List[str], 
+        self,
+        model: mesa.Model,
+        update_methods: List[str],
         step_method: str,
-        log_methods: List[str]
+        log_methods: List[str],
     ) -> None:
         """
         Create an empty Single Activation schedule.
@@ -435,7 +432,7 @@ class SingleActivation(mesa.time.BaseScheduler):
                             order to run them in.
             step_method: The name of the step method to be activated in a
                          single randomly chosen agent.
-            log_methods: List of strings of names of stages to run after step_method, 
+            log_methods: List of strings of names of stages to run after step_method,
                          in the order to run them in.
         """
         super().__init__(model)

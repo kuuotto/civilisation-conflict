@@ -48,6 +48,7 @@ for i in tqdm(range(n_steps)):
 agent_data = mdl.datacollector.get_agent_vars_dataframe()
 action_data = mdl.datacollector.get_table_dataframe("actions")
 reward_data = mdl.datacollector.get_table_dataframe("rewards")
+action_quality_data = mdl.datacollector.get_table_dataframe("action_qualities")
 
 # %%  save data
 with open("output/data.pickle", "wb") as f:
@@ -56,6 +57,7 @@ with open("output/data.pickle", "wb") as f:
             "agent_data": agent_data,
             "action_data": action_data,
             "reward_data": reward_data,
+            "action_quality_data": action_quality_data,
         },
         f,
     )
