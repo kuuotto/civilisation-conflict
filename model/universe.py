@@ -134,6 +134,7 @@ class Universe(mesa.Model):
             self,
             update_methods=["step_tech_level", "step_update_beliefs", "step_plan"],
             step_method="step_act",
+            log_methods=["step_log_reward"]
         )
         self.space = mesa.space.ContinuousSpace(x_max=1, y_max=1, torus=toroidal_space)
 
@@ -212,12 +213,20 @@ class Universe(mesa.Model):
                     "action",
                     "attack_target",
                     "attack_successful",
+                ],
+                "rewards": [
+                    "time",
+                    "agent",
+                    "reward"
                 ]
             },
         )
 
         # keep track of the last action
         self.previous_action = None
+
+        # keep track of the previous model state
+        self.previous_state = None
 
         # initialise a log for events
         self.log = []
@@ -411,7 +420,11 @@ class SingleActivation(mesa.time.BaseScheduler):
     """
 
     def __init__(
-        self, model: mesa.Model, update_methods: list[str], step_method: str
+        self, 
+        model: mesa.Model, 
+        update_methods: List[str], 
+        step_method: str,
+        log_methods: List[str]
     ) -> None:
         """
         Create an empty Single Activation schedule.
@@ -422,15 +435,19 @@ class SingleActivation(mesa.time.BaseScheduler):
                             order to run them in.
             step_method: The name of the step method to be activated in a
                          single randomly chosen agent.
+            log_methods: List of strings of names of stages to run after step_method, 
+                         in the order to run them in.
         """
         super().__init__(model)
         self.update_methods = update_methods
         self.step_method = step_method
+        self.log_methods = log_methods
 
     def step(self) -> None:
         """
         Executes the update method(s) of all agents (if multiple, in stages)
-        and then the step method of a randomly chosen agent.
+        and then the step method of a randomly chosen agent. Finally, executes
+        lof method(s) of all agents (if multiple, in stages)
         """
         # To be able to remove and/or add agents during stepping
         # it's necessary to cast the keys view to a list.
@@ -447,9 +464,20 @@ class SingleActivation(mesa.time.BaseScheduler):
             # in the previous loop.
             agent_keys = list(self._agents.keys())
 
-        # finally, choose a random agent to step
-        agent = self.model.rng.choice(agent_keys)
+        # choose a random agent to step
+        agent = self.model.random.choice(agent_keys)
         getattr(self._agents[agent], self.step_method)()
+
+        # run log methods in stages for all agents
+        for log_method in self.log_methods:
+            for agent_key in agent_keys:
+                if agent_key in self._agents:
+                    # run update method
+                    getattr(self._agents[agent_key], log_method)()
+
+            # We recompute the keys because some agents might have been removed
+            # in the previous loop.
+            agent_keys = list(self._agents.keys())
 
         # increase time
         self.time += 1
