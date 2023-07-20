@@ -259,6 +259,85 @@ class Civilisation(mesa.Agent):
             row={"time": self.model.schedule.time, "agent": self.id, "reward": reward},
         )
 
+    def step_log_estimated_action_qualities(self):
+        """
+        Stores:
+        - the estimated action qualities of agent's own actions
+        - the estimated action qualities of others' actions
+        """
+        # determine own estimated action qualities
+        root_node = self.forest.top_level_tree_root_node
+        action_qualities = ipomdp_solver.calculate_action_qualities(
+            belief=root_node.belief,
+            n_expansions=root_node.n_expansions,
+            n_expansions_act=root_node.n_expansions_act,
+            act_value=root_node.act_value,
+            explore=False,
+            softargmax=False,
+            exploration_coef=0,
+            softargmax_coef=0,
+        )
+
+        # store
+        self.model.datacollector.add_table_row(
+            table_name="action_qualities",
+            row={
+                "time": self.model.schedule.time,
+                "estimator": self.id,
+                "actor": self.id,
+                "qualities": action_qualities,
+            },
+        )
+
+        # determine estimated action qualities for other agents
+        for other_agent in self.model.agents:
+            if other_agent == self:
+                continue
+
+            action_qualities = np.zeros(len(other_agent.possible_actions()))
+
+            for particle in root_node.particles:
+                if particle.weight == 0:
+                    continue
+
+                # initialise weights in the level L-1 tree
+                self.forest.initialise_simulation(particle)
+
+                # determine the appropriate node in the lower tree
+                lower_node = self.forest.get_matching_lower_node(
+                    particle=particle, agent=other_agent
+                )
+
+                # determine action qualities for other_agent
+                particle_action_qualities = ipomdp_solver.calculate_action_qualities(
+                    belief=lower_node.belief,
+                    n_expansions=lower_node.n_expansions,
+                    n_expansions_act=lower_node.n_expansions_act,
+                    act_value=lower_node.act_value,
+                    explore=False,
+                    softargmax=False,
+                    exploration_coef=0,
+                    softargmax_coef=0,
+                )
+
+                # if there are unexpanded actions (np.infty), ignore them but include
+                # the other estimates
+                particle_action_qualities[particle_action_qualities == np.infty] = 0
+
+                # add to weighted sum
+                action_qualities += particle.weight * particle_action_qualities
+
+            # store
+            self.model.datacollector.add_table_row(
+                table_name="action_qualities",
+                row={
+                    "time": self.model.schedule.time,
+                    "estimator": self.id,
+                    "actor": other_agent.id,
+                    "qualities": action_qualities,
+                },
+            )
+
     def dprint(self, *message):
         """Prints message to the console if debugging flag is on"""
         if self.model.debug:
