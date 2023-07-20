@@ -250,7 +250,8 @@ class BeliefForest:
         owner_observation: observation received by the owner
         """
         model = self.owner.model
-        print(f"{self.owner} observed {owner_observation}")
+        if model.debug >= 1:
+            print(f"{self.owner} observed {owner_observation}")
 
         ### 1. update the beliefs in the top-level tree of the owner
 
