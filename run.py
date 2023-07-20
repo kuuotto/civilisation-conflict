@@ -45,19 +45,24 @@ for i in tqdm(range(n_steps)):
     mdl.step()
 
 # retrieve data
-data = mdl.datacollector.get_agent_vars_dataframe()
+agent_data = mdl.datacollector.get_agent_vars_dataframe()
 action_data = mdl.datacollector.get_table_dataframe("actions")
+reward_data = mdl.datacollector.get_table_dataframe("rewards")
 
 # %%  save data
 with open("output/data.pickle", "wb") as f:
-    pickle.dump(data, f)
-
-with open("output/action_data.pickle", "wb") as f:
-    pickle.dump(action_data, f)
+    pickle.dump(
+        {
+            "agent_data": agent_data,
+            "action_data": action_data,
+            "reward_data": reward_data,
+        },
+        f,
+    )
 
 # %% Visualise model run
 vis = visualise.draw_universe(
-    data=data,
+    data=agent_data,
     action_data=action_data,
     anim_filename="output/output.mp4",
     anim_length=60,
@@ -65,5 +70,5 @@ vis = visualise.draw_universe(
 plt.show()
 
 # %% Diagnostic plots
-visualise.plot_technology_distribution(data, **params)
+visualise.plot_technology_distribution(agent_data, **params)
 visualise.plot_streak_length_distribution(action_data, **params)

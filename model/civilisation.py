@@ -152,7 +152,11 @@ class Civilisation(mesa.Agent):
         else:
             raise NotImplementedError("Only 'random' and 'ipomdp' are supported")
 
+        # store current model state (needed for calculating reward later)
+        self.model.previous_state = self.model.get_state()
+
         ### 2. Perform and log action
+
         if isinstance(agent_action, Civilisation):
             target = agent_action
 
@@ -166,7 +170,7 @@ class Civilisation(mesa.Agent):
 
             if not attacker_capable:
                 self.dprint(f"Tries to attack {target} but they are out of reach")
-                result = np.nan
+                result = None
 
             elif self.tech_level > target.tech_level or (
                 self.tech_level == target.tech_level and self.rng.random() > 0.5
@@ -212,7 +216,7 @@ class Civilisation(mesa.Agent):
                 "actions",
                 {
                     "time": self.model.schedule.time,
-                    "actor": self.unique_id,
+                    "actor": self.id,
                     "action": action.HIDE,
                 },
                 ignore_missing=True,
@@ -225,7 +229,7 @@ class Civilisation(mesa.Agent):
                 "actions",
                 {
                     "time": self.model.schedule.time,
-                    "actor": self.unique_id,
+                    "actor": self.id,
                     "action": action.NO_ACTION,
                 },
                 ignore_missing=True,
@@ -236,6 +240,24 @@ class Civilisation(mesa.Agent):
 
         self.previous_agent_action = agent_action
         self.model.previous_action = (self, agent_action)
+
+    def step_log_reward(self):
+        """
+        Stores the reward received by agent at the end of a turn.
+        """
+        # calculate reward
+        reward = ipomdp.reward(
+            state=self.model.previous_state,
+            action_=self.model.previous_action,
+            agent=self,
+            model=self.model,
+        )
+
+        # store
+        self.model.datacollector.add_table_row(
+            table_name="rewards",
+            row={"time": self.model.schedule.time, "agent": self.id, "reward": reward},
+        )
 
     def dprint(self, *message):
         """Prints message to the console if debugging flag is on"""
