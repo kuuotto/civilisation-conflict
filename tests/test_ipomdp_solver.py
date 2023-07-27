@@ -203,8 +203,8 @@ class TestActionQualityCalculation(unittest.TestCase):
     def test_action_qualities_1(self):
         # tests calculating the action values with only a single particle
         belief = np.array([1.0])
-        n_expansions = np.array([10]).astype(np.int32)
-        n_expansions_act = np.array([[2, 3, 5]]).astype(np.int32)
+        n_expansions = np.array([10]).astype(np.uint16)
+        n_expansions_act = np.array([[2, 3, 5]]).astype(np.uint16)
         act_value = np.array([[-1, -0.5, -0.1]])
 
         # correct action qualities
@@ -216,9 +216,7 @@ class TestActionQualityCalculation(unittest.TestCase):
             n_expansions_act=n_expansions_act,
             act_value=act_value,
             explore=False,
-            softargmax=False,
             exploration_coef=0,
-            softargmax_coef=0,
         )
 
         self.assertTrue((action_qualities == correct_action_qualities).all())
@@ -229,14 +227,14 @@ class TestActionQualityCalculation(unittest.TestCase):
         n_actions = 3
 
         belief = np.array([0.4, 0.6, 0.0])
-        n_expansions = np.array([10, 12, 5]).astype(np.int32)
+        n_expansions = np.array([10, 12, 5]).astype(np.uint16)
         n_expansions_act = np.array(
             [
                 [2, 3, 5],
                 [6, 6, 0],
                 [0, 2, 3],
             ]
-        ).astype(np.int32)
+        ).astype(np.uint16)
         act_value = np.array(
             [
                 [-1, -0.5, -0.1],
@@ -264,9 +262,7 @@ class TestActionQualityCalculation(unittest.TestCase):
             n_expansions_act=n_expansions_act,
             act_value=act_value,
             explore=False,
-            softargmax=False,
             exploration_coef=0,
-            softargmax_coef=0,
         )
 
         self.assertTrue((action_qualities == Q).all())
@@ -278,7 +274,7 @@ class TestActionQualityCalculation(unittest.TestCase):
         n_actions = 5
 
         belief = np.array([0.3, 0.3, 0.0, 0.4])
-        n_expansions = np.array([1, 1, 1, 1]).astype(np.int32)
+        n_expansions = np.array([1, 1, 1, 1]).astype(np.uint16)
         n_expansions_act = np.array(
             [
                 [1, 0, 0, 0, 0],
@@ -286,7 +282,7 @@ class TestActionQualityCalculation(unittest.TestCase):
                 [0, 0, 1, 0, 0],
                 [0, 0, 0, 1, 0],
             ]
-        ).astype(np.int32)
+        ).astype(np.uint16)
         act_value = np.array(
             [
                 [-2, 0, 0, 0, 0],
@@ -302,9 +298,7 @@ class TestActionQualityCalculation(unittest.TestCase):
             n_expansions_act=n_expansions_act,
             act_value=act_value,
             explore=True,
-            softargmax=False,
             exploration_coef=0,
-            softargmax_coef=0,
         )
 
         # unexplored action (index 4) should equal np.infty
@@ -327,14 +321,14 @@ class TestActionQualityCalculation(unittest.TestCase):
         softargmax_coef = 0.1
 
         belief = np.array([0.4, 0.6, 0.0])
-        n_expansions = np.array([10, 12, 5]).astype(np.int32)
+        n_expansions = np.array([10, 12, 5]).astype(np.uint16)
         n_expansions_act = np.array(
             [
                 [2, 3, 5],
                 [6, 6, 0],
                 [0, 2, 3],
             ]
-        ).astype(np.int32)
+        ).astype(np.uint16)
         act_value = np.array(
             [
                 [-1, -0.5, -0.1],
@@ -345,16 +339,6 @@ class TestActionQualityCalculation(unittest.TestCase):
 
         # correct action qualities
         N = sum(n_expansions[p_i] for p_i in range(n_particles) if belief[p_i] > 0)
-        W = sum(belief[p_i] * n_expansions[p_i] for p_i in range(n_particles))
-        W_a = np.array(
-            [
-                sum(
-                    belief[p_i] * n_expansions_act[p_i, a_i]
-                    for p_i in range(n_particles)
-                )
-                for a_i in range(n_actions)
-            ]
-        )
         Q = np.array(
             [
                 sum(belief[p_i] * act_value[p_i, a_i] for p_i in range(n_particles))
@@ -367,23 +351,26 @@ class TestActionQualityCalculation(unittest.TestCase):
             ]
         )
 
-        # this is a slightly different, but equivalent way to calculate the action
-        # probabilities
-        action_probabilities = np.exp(Q / (softargmax_coef * (1 / np.sqrt(N))))
-        action_probabilities /= action_probabilities.sum()
+        # calculate the correct (cumulative and unnormalised) action probabilities
+        action_probabilities_correct = np.exp(Q / (softargmax_coef * (1 / np.sqrt(N))))
+        action_probabilities_correct /= action_probabilities_correct.sum()
 
-        action_qualities = ipomdp_solver.calculate_action_qualities(
+        (
+            action_probabilities,
+            status_code,
+        ) = ipomdp_solver.calculate_action_probabilities(
             belief=belief,
             n_expansions=n_expansions,
             n_expansions_act=n_expansions_act,
             act_value=act_value,
-            explore=False,
-            softargmax=True,
-            exploration_coef=0,
             softargmax_coef=softargmax_coef,
         )
 
-        self.assertTrue(np.allclose(action_qualities, action_probabilities))
+        # check that the calculated action probabilities are correct
+        self.assertTrue(np.allclose(action_probabilities, action_probabilities_correct))
+
+        # check that the returned status code is 10, which indicates success
+        self.assertEqual(status_code, 10)
 
     def test_action_qualities_5(self):
         # testing exploration term
@@ -393,7 +380,7 @@ class TestActionQualityCalculation(unittest.TestCase):
         exploration_coef = 0.5
 
         belief = np.array([0.3, 0.2, 0.1, 0.4])
-        n_expansions = np.array([1, 1, 1, 1]).astype(np.int32)
+        n_expansions = np.array([1, 1, 1, 1]).astype(np.uint16)
         n_expansions_act = np.array(
             [
                 [1, 0, 0, 0],
@@ -401,7 +388,7 @@ class TestActionQualityCalculation(unittest.TestCase):
                 [0, 0, 1, 0],
                 [0, 0, 0, 1],
             ]
-        ).astype(np.int32)
+        ).astype(np.uint16)
         act_value = np.array(
             [
                 [-2, 0, 0, 0],
@@ -445,9 +432,7 @@ class TestActionQualityCalculation(unittest.TestCase):
             n_expansions_act=n_expansions_act,
             act_value=act_value,
             explore=True,
-            softargmax=False,
             exploration_coef=exploration_coef,
-            softargmax_coef=0,
         )
 
         self.assertTrue((action_qualities == Q).all())
@@ -519,9 +504,11 @@ class TestTreeExpansion(unittest.TestCase):
 
             for particle in node.particles:
                 for other_agent in other_agents:
-                    self.assertIn(other_agent, particle.lower_particle_dist)
+                    self.assertTrue(
+                        particle.lower_particle_dist[other_agent.id] is not None
+                    )
 
-                    mask, values = particle.lower_particle_dist[other_agent]
+                    mask, values = particle.lower_particle_dist[other_agent.id]
                     weights = np.zeros(len(mask))
                     weights[mask] = values
                     self.assertIsInstance(weights, np.ndarray)

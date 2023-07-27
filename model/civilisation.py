@@ -273,9 +273,7 @@ class Civilisation(mesa.Agent):
             n_expansions_act=root_node.n_expansions_act,
             act_value=root_node.act_value,
             explore=False,
-            softargmax=False,
             exploration_coef=0,
-            softargmax_coef=0,
         )
 
         # store
@@ -315,9 +313,7 @@ class Civilisation(mesa.Agent):
                     n_expansions_act=lower_node.n_expansions_act,
                     act_value=lower_node.act_value,
                     explore=False,
-                    softargmax=False,
                     exploration_coef=0,
-                    softargmax_coef=0,
                 )
 
                 # if there are unexpanded actions (np.infty), ignore them but include
