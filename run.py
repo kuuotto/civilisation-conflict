@@ -11,7 +11,7 @@ params = {
     "n_agents": 2,
     "agent_growth": "sigmoid",
     "agent_growth_params": {
-        "speed_range": (0.5, 0.5),
+        "speed_range": (0.3, 0.5),
         "takeoff_time_range": (20, 40),
         "speed_noise_scale": 0.03,
         "speed_noise_dist": "normal",
@@ -21,11 +21,11 @@ params = {
     "n_root_belief_samples": 1000,
     "n_tree_simulations": 10000,
     "n_reinvigoration_particles": 0,
-    "obs_noise_sd": 0.1,
-    "obs_self_noise_sd": 0.03,
+    "obs_noise_sd": 0.15,
+    "obs_self_noise_sd": 0.15,
     "reasoning_level": 2,
     "action_dist_0": "random",  # can be "random", "passive" or "aggressive"
-    "discount_factor": 0.7,
+    "discount_factor": 0.6,
     "discount_epsilon": 0.10,
     "exploration_coef": 0.1,
     "softargmax_coef": 0.01,
