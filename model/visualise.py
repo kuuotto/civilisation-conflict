@@ -301,23 +301,21 @@ def plot_technology_distribution(data, n_bins=10, **params):
     plt.show()
 
 
-def plot_streak_length_distribution(action_data, **params):
+def plot_streak_length_distribution(streaks, ax=None, **params):
     """
     Visualise distribution of attack streak lengths on a log-log scale.
     An attack streak is defined as successive time steps when an attack occurs
     (whether successful or not).
 
     Parameters:
-    action_data: a pandas DataFrame collected by the model datacollector
+    streaks: calculated streaks, as returned by analyse.count_attack_streaks
+    ax: a Matplotlib Axes. If provided, plotting will be done on the Axes
     **params: model parameter values used for the simulation. These will be
               displayed under the plot as a caption.
     """
-    fig, ax = plt.subplots(constrained_layout=True, figsize=(5, 5))
-
-    # count streaks
-    streaks = analyse.count_streaks(
-        action_data[action_data.action == "a"]["time"].values
-    )
+    create_new_axes = ax is None
+    if create_new_axes:
+        fig, ax = plt.subplots(constrained_layout=True, figsize=(5, 5))
 
     if len(streaks) == 0:
         print("There were no attacks in the data.")
