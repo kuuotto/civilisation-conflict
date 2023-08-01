@@ -189,6 +189,8 @@ def prob_observation(
     # convert observation into an array
     observation = np.array(observation, dtype=np.float_)
 
+    # assert model.obs_noise_sd == model.obs_self_noise_sd
+
     return _prob_observation(
         observation=observation,
         states=states,
@@ -348,11 +350,11 @@ def _prob_observation(
     # find individual densities of observations
     # TODO: optimise
     densities = _norm_pdf(x=observation, mean=expected_observation, sd=obs_noise_sd)
-    densities[:, observer_id] = _norm_pdf(
-        x=observation[observer_id],
-        mean=expected_observation[:, observer_id],
-        sd=obs_self_noise_sd,
-    )
+    # densities[:, observer_id] = _norm_pdf(
+    #     x=observation[observer_id],
+    #     mean=expected_observation[:, observer_id],
+    #     sd=obs_self_noise_sd,
+    # )
 
     # multiply to get final probabilities
     # probabilities *= densities.prod(axis=1)

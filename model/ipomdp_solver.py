@@ -24,6 +24,8 @@ if TYPE_CHECKING:
     Observation = Tuple
     Belief = NDArray
 
+WEIGHT_STORAGE_DTYPE = np.float32
+
 
 def joint_to_agent_action_history(
     joint_action_history: JointActionHistory, agent: civilisation.Civilisation
@@ -299,7 +301,7 @@ class BeliefForest:
         new_root_node.weight_particles(owner_observation)
 
         # check that the weights do not sum to 0
-        if new_root_node.belief.max() == 0:
+        if new_root_node.belief.sum() == 0:
             raise Exception(
                 "The weights of the particles in the top-level tree root node are all 0"
             )
@@ -555,9 +557,6 @@ class Tree:
         node = self.forest.top_level_tree_root_node
         particle_weights = node.belief
 
-        if particle_weights.max() == 0:
-            raise Exception("Top level tree root node weights are all 0")
-
         for next_agent in self.signature[1:]:
             # choose random particle given weights
             particle: Particle = model.random.choices(
@@ -771,9 +770,9 @@ class Tree:
 
                 if lower_node is None:
                     # couldn't find lower node
-                    model.add_log_event(
-                        event_type=31, event_data=(self.signature, other_agent)
-                    )
+                    # model.add_log_event(
+                    #     event_type=31, event_data=(self.signature, other_agent)
+                    # )
                     continue
 
                 lower_node.resample_particles()
@@ -783,9 +782,9 @@ class Tree:
 
                 if next_lower_node is None:
                     # there is no node, so we cannot create beliefs
-                    model.add_log_event(
-                        event_type=32, event_data=(self.signature, other_agent)
-                    )
+                    # model.add_log_event(
+                    #     event_type=32, event_data=(self.signature, other_agent)
+                    # )
                     continue
 
                 # generate observation
@@ -800,9 +799,9 @@ class Tree:
                 next_lower_node.weight_particles(other_agent_obs)
 
                 # log successful creation of lower node belief
-                model.add_log_event(
-                    event_type=30, event_data=(self.signature, other_agent)
-                )
+                # model.add_log_event(
+                #     event_type=30, event_data=(self.signature, other_agent)
+                # )
 
         ### 5. Repeat
 
@@ -1234,20 +1233,35 @@ class Node:
         # if the node is the root node in some other tree than level 0, assign weights
         # to particles in the root nodes on the level below
         if not in_bottom_level_tree:
+            # “default” action used to generate the initial beliefs
+            # default_action = (self.tree.agent, action.NO_ACTION)
+            # default_prev_action_actor_ids = np.full(
+            #     shape=(model.n_root_belief_samples,),
+            #     fill_value=self.tree.agent.id,
+            #     dtype=np.int8,
+            # )
+            # default_prev_action_target_ids = np.full(
+            #     shape=(model.n_root_belief_samples,), fill_value=-1, dtype=np.int8
+            # )
+
             for child_tree in self.tree.forest.child_trees(parent_tree=self.tree):
                 # find root node in the child tree
                 assert len(child_tree.root_nodes) == 1
                 child_tree_root_node = child_tree.root_nodes[0]
 
                 # find number of particles
-                n_particles = len(child_tree_root_node.particles)
+                n_particles = child_tree_root_node.n_particles
                 assert n_particles == model.n_root_belief_samples
 
-                # assign uniform weights
-                particle_weights = np.array(n_particles * (1 / n_particles,))
-                weights_mask = particle_weights > 0
-                weights_values = particle_weights[weights_mask]
                 for particle in self.particles:
+                    # create uniform weights
+                    particle_weights = np.array(n_particles * (1 / n_particles,))
+                    weights_mask = particle_weights > 0
+                    weights_values = particle_weights[weights_mask].astype(
+                        WEIGHT_STORAGE_DTYPE
+                    )
+
+                    # store created belief
                     particle.lower_particle_dist[child_tree.agent.id] = (
                         weights_mask,
                         weights_values,
@@ -1274,9 +1288,20 @@ class Node:
         """
         if self.n_particles == 0:
             self.belief = np.array([])
+            self.belief_observation = observation
             return
 
         model = self.tree.forest.owner.model
+
+        # find prior weights
+        assert -1 not in self.prev_particle_ids
+        prior_weights = self.parent_node.belief[self.prev_particle_ids]
+
+        # if the prior is already diverged, no need to calculate further
+        if prior_weights.sum() == 0:
+            self.belief = prior_weights
+            self.belief_observation = observation
+            return
 
         # calculate weights
         weights = ipomdp.prob_observation(
@@ -1287,10 +1312,6 @@ class Node:
             observer=self.tree.agent,
             model=model,
         )
-
-        # find prior weights
-        assert -1 not in self.prev_particle_ids
-        prior_weights = self.parent_node.belief[self.prev_particle_ids]
 
         # multiply likelihood by prior to get final weights
         weights *= prior_weights
@@ -1316,17 +1337,14 @@ class Node:
             return
 
         model = self.tree.forest.owner.model
-        # TODO: Maybe better to use true number of particles instead?
-        # n_particles = (self._belief > 0).sum()
-        n_particles = self.n_particles
 
-        if n_particles == 0:
+        if self.n_particles == 0 or self.belief.sum() == 0:
             return
 
         self.resample_counts = systematic_resample(
             weights=self._belief,
             r=model.random.random(),
-            size=n_particles,
+            size=self.n_particles,
         )
 
     def update_lower_beliefs(self):
@@ -1383,36 +1401,36 @@ class Node:
                     # save an empty belief to particle
                     particle.lower_particle_dist[other_agent.id] = np.array(
                         [], dtype=np.bool_
-                    ), np.array([])
+                    ), np.array([], dtype=WEIGHT_STORAGE_DTYPE)
 
-                    # log event
-                    model.add_log_event(
-                        event_type=22,
-                        event_data=(
-                            self.tree.signature,
-                            self.agent_action_history,
-                            lower_node.tree.signature,
-                            lower_node.agent_action_history,
-                        ),
-                    )
+                    # # log event
+                    # model.add_log_event(
+                    #     event_type=22,
+                    #     event_data=(
+                    #         self.tree.signature,
+                    #         self.agent_action_history,
+                    #         lower_node.tree.signature,
+                    #         lower_node.agent_action_history,
+                    #     ),
+                    # )
                     continue
 
                 if lower_node.n_particles == 0:
                     # the target node has no particles so there is nothing to weight
                     particle.lower_particle_dist[other_agent.id] = np.array(
                         [], dtype=np.bool_
-                    ), np.array([])
+                    ), np.array([], dtype=WEIGHT_STORAGE_DTYPE)
 
-                    # log event
-                    model.add_log_event(
-                        event_type=23,
-                        event_data=(
-                            self.tree.signature,
-                            self.agent_action_history,
-                            lower_node.tree.signature,
-                            lower_node.agent_action_history,
-                        ),
-                    )
+                    # # log event
+                    # model.add_log_event(
+                    #     event_type=23,
+                    #     event_data=(
+                    #         self.tree.signature,
+                    #         self.agent_action_history,
+                    #         lower_node.tree.signature,
+                    #         lower_node.agent_action_history,
+                    #     ),
+                    # )
                     continue
 
                 # simulate an observation for the other agent given this particle
@@ -1430,21 +1448,23 @@ class Node:
                 lower_node.weight_particles(observation=other_agent_obs)
 
                 # check if the belief in the lower node has diverged
-                if lower_node.belief.max() == 0:
-                    # report that belief is diverged
-                    model.add_log_event(
-                        event_type=21,
-                        event_data=(
-                            self.tree.signature,
-                            self.agent_action_history,
-                            lower_node.tree.signature,
-                            lower_node.agent_action_history,
-                        ),
-                    )
+                # if lower_node.belief.sum() == 0:
+                #     # report that belief is diverged
+                #     model.add_log_event(
+                #         event_type=21,
+                #         event_data=(
+                #             self.tree.signature,
+                #             self.agent_action_history,
+                #             lower_node.tree.signature,
+                #             lower_node.agent_action_history,
+                #         ),
+                #     )
 
                 # save weights (in sparse format to save memory)
                 belief_mask = lower_node.belief > 0
-                belief_values = lower_node.belief[belief_mask]
+                belief_values = lower_node.belief[belief_mask].astype(
+                    WEIGHT_STORAGE_DTYPE
+                )
                 particle.lower_particle_dist[other_agent.id] = (
                     belief_mask,
                     belief_values,
