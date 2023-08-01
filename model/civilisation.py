@@ -287,6 +287,9 @@ class Civilisation(mesa.Agent):
             },
         )
 
+        if self.forest.top_level_tree.level == 0:
+            return
+
         # determine estimated action qualities for other agents
         for other_agent in self.model.agents:
             if other_agent == self:
