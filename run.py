@@ -20,7 +20,6 @@ params = {
     "rewards": {"destroyed": -1, "hide": -0.01, "attack": 0},
     "n_root_belief_samples": 1000,
     "n_tree_simulations": 10000,
-    "n_reinvigoration_particles": 0,
     "obs_noise_sd": 0.15,
     "obs_self_noise_sd": 0.15,
     "reasoning_level": 2,

@@ -14,7 +14,6 @@ class Universe(mesa.Model):
         rewards,
         n_root_belief_samples,
         n_tree_simulations,
-        n_reinvigoration_particles,
         obs_noise_sd,
         obs_self_noise_sd,
         reasoning_level,
@@ -49,8 +48,6 @@ class Universe(mesa.Model):
                                representing beliefs at root nodes of trees
         n_tree_simulations: the number of simulations to perform on each tree \
                             when planning
-        n_reinvigoration_particles: number of additional particles to create \
-                                    for each tree when updating beliefs
         obs_noise_sd: standard deviation of technosignature observation noise \
                       (which follows an unbiased normal distribution)
         obs_self_noise_sd: standard deviation of own technosignature observation noise \
@@ -101,7 +98,6 @@ class Universe(mesa.Model):
         self.rewards = rewards
         self.n_root_belief_samples = n_root_belief_samples
         self.n_tree_simulations = n_tree_simulations
-        self.n_reinvigoration_particles = n_reinvigoration_particles
         self.obs_noise_sd = obs_noise_sd
         self.obs_self_noise_sd = obs_self_noise_sd
         self.reasoning_level = reasoning_level
