@@ -18,6 +18,7 @@ params = {
         "takeoff_time_noise_scale": 3,
     },
     "rewards": {"destroyed": -1, "hide": -0.01, "attack": 0},
+    "prob_indifferent": 0,
     "n_root_belief_samples": 1000,
     "n_tree_simulations": 10000,
     "obs_noise_sd": 0.15,

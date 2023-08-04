@@ -12,6 +12,7 @@ class Universe(mesa.Model):
         agent_growth,
         agent_growth_params,
         rewards,
+        prob_indifferent,
         n_root_belief_samples,
         n_tree_simulations,
         obs_noise_sd,
@@ -44,6 +45,10 @@ class Universe(mesa.Model):
         agent_growth_params: see agent_growth
         rewards: a dictionary of rewards with keys 'destroyed', 'hide' and \
                  'attack' and the rewards as values
+        prob_indifferent: probability that civilisations believe each other agent has \
+                          an attack reward of 0. Called “indifference” because an agent \
+                          with an attack reward of 0 does not include the well-being \
+                          of others in its moral considerations.
         n_root_belief_samples: the number of samples (particles) used in \
                                representing beliefs at root nodes of trees
         n_tree_simulations: the number of simulations to perform on each tree \
@@ -96,6 +101,7 @@ class Universe(mesa.Model):
         self.n_agents = n_agents
         self.agent_growth_params = agent_growth_params
         self.rewards = rewards
+        self.prob_indifferent = prob_indifferent
         self.n_root_belief_samples = n_root_belief_samples
         self.n_tree_simulations = n_tree_simulations
         self.obs_noise_sd = obs_noise_sd
