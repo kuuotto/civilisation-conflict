@@ -108,6 +108,7 @@ def reward(
     action_: ipomdp_solver.Action,
     agent: civilisation.Civilisation,
     model: universe.Universe,
+    attack_reward: float = None,
 ) -> float:
     """
     Given the current environment state and an action taken in that state,
@@ -118,6 +119,7 @@ def reward(
     action: the action taken in the state
     agent: the Civilisation whose reward we want to calculate
     model: a Universe
+    attack_reward: can be used to override the reward for attacking
     """
     actor, actor_action = action_
 
@@ -154,7 +156,7 @@ def reward(
 
     # if agent attacks, return the cost
     if actor == agent:
-        return model.rewards["attack"]
+        return model.rewards["attack"] if attack_reward is None else attack_reward
 
     # now we know that agent was attacked
 
