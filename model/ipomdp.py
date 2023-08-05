@@ -573,8 +573,12 @@ def rollout(
     # choose actor
     actor = model.random.choice(model.agents)
 
-    # choose action (only ones that actor is capable of)
-    actor_action = model.random.choice(actor.possible_actions(state=state))
+    # choose action (random if we choose, default policy for other actors)
+    if (actor == agent) or (actor != agent and model.action_dist_0 == "random"):
+        actor_action = model.random.choice(actor.possible_actions(state=state))
+    else:
+        actor_action = level0_opponent_policy(agent=actor, model=model)
+
     action = (actor, actor_action)
 
     # calculate value of taking action in state

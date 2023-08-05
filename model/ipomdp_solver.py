@@ -325,6 +325,20 @@ class BeliefForest:
                 f"{self.top_level_tree.signature}: ({new_root_node.agent_action_history})",
             )
 
+            # report the proportions of particles with different models
+            other_agents = tuple(ag for ag in model.agents if ag != self.owner)
+            prob_indifferent = {other_agent: 0 for other_agent in other_agents}
+            for particle in new_root_node.particles:
+                for other_agent in other_agents:
+                    if (
+                        particle.other_agent_frames[other_agent.id]["attack_reward"]
+                        == 0
+                    ):
+                        prob_indifferent[other_agent] += particle.weight
+            print(
+                f"In {self.top_level_tree}, {prob_indifferent:.4f} of weight is given to indifferent models of the other agents"
+            )
+
         ### 2. update the beliefs in the child trees recursively
 
         for child_tree in self.child_trees(self.top_level_tree, include_parent=False):
@@ -700,10 +714,10 @@ class Tree:
             # find matching node
             lower_node = other_agent_nodes[actor]
 
-            # if node is not found, choose random action
+            # if node is not found, choose with default policy
             if lower_node is None:
                 model.add_log_event(event_type=11, event_data=(self.signature,))
-                actor_action = model.random.choice(actor.possible_actions())
+                actor_action = ipomdp.level0_opponent_policy(agent=actor, model=model)
 
             else:
                 # determine action from the other agent's tree
@@ -996,7 +1010,9 @@ class Tree:
             )
 
             if status_code in (12, 13):
-                choice = model.random.choice(actions)
+                choice = ipomdp.level0_opponent_policy(
+                    agent=node.tree.agent, model=model
+                )
             else:
                 choice = model.random.choices(actions, weights=act_probs)[0]
 
