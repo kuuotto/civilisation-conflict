@@ -336,7 +336,7 @@ class BeliefForest:
                     ):
                         prob_indifferent[other_agent] += particle.weight
             print(
-                f"In {self.top_level_tree}, {prob_indifferent:.4f} of weight is given to indifferent models of the other agents"
+                f"In {self.top_level_tree}, {prob_indifferent} of weight is given to indifferent models of the other agents"
             )
 
         ### 2. update the beliefs in the child trees recursively
