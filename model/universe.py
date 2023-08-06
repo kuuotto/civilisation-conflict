@@ -20,6 +20,7 @@ class Universe(mesa.Model):
         reasoning_level,
         action_dist_0,
         initial_belief,
+        initial_belief_params,
         discount_factor,
         discount_epsilon,
         exploration_coef,
@@ -65,6 +66,8 @@ class Universe(mesa.Model):
                        chosen uniformly over the set of possible choices.
         initial_belief: defines the function used to generate initial beliefs. \
                         Currently supports "uniform".
+        initial_belief_params: a dictionary of possible parameters for the initial \
+                               belief generator
         discount_factor: how much future time steps are discounted when \
                          determining the rational actions of agents
         discount_epsilon: how small the value discount_factor ** time has to \
@@ -112,6 +115,7 @@ class Universe(mesa.Model):
         self.reasoning_level = reasoning_level
         self.action_dist_0 = action_dist_0
         self.initial_belief = initial_belief
+        self.initial_belief_params = initial_belief_params
         self.discount_factor = discount_factor
         self.discount_epsilon = discount_epsilon
         self.exploration_coef = exploration_coef

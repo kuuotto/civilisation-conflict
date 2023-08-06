@@ -21,7 +21,12 @@ def create_small_universe(**kwargs):
         "obs_self_noise_sd": 0.03,
         "reasoning_level": 2,
         "action_dist_0": "random",
-        "initial_belief": "uniform",  # can be "uniform",
+        "initial_belief": "uniform",  # can be "uniform" or "surpass_scenario"
+        "initial_belief_params": {
+            "time_until_surpass": 3,
+            "prob_surpass_0": 0.5,
+            "prob_surpass_1": 0.5,
+        },
         "discount_factor": 0.9,
         "discount_epsilon": 0.05,
         "exploration_coef": 1,

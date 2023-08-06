@@ -1275,6 +1275,12 @@ class Node:
                 model=model,
                 agent=self.tree.agent if in_top_level_tree else None,
             )
+        elif model.initial_belief == "surpass_scenario":
+            initial_particle_states = ipomdp.surpass_scenario_initial_belief(
+                n_samples=n_particles,
+                level=self.tree.level,
+                model=model,
+            )
         else:
             raise Exception(f"Unrecognised initial belief '{model.initial_belief}'")
 
