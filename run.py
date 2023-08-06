@@ -23,12 +23,17 @@ params = {
     "n_tree_simulations": 10000,
     "obs_noise_sd": 0.15,
     "obs_self_noise_sd": 0.15,
-    "reasoning_level": 2,
+    "reasoning_level": 1,
     "action_dist_0": "random",  # can be "random", "passive" or "aggressive"
-    "initial_belief": "uniform",  # can be "uniform",
+    "initial_belief": "uniform",  # can be "uniform" or "surpass_scenario"
+    "initial_belief_params": {
+        "time_until_surpass": 3,
+        "prob_surpass_0": 0,
+        "prob_surpass_1": 0.5,
+    },
     "discount_factor": 0.6,
     "discount_epsilon": 0.10,
-    "exploration_coef": 0.1,
+    "exploration_coef": 0.3,
     "softargmax_coef": 0.01,
     "visibility_multiplier": 0.5,
     "decision_making": "ipomdp",

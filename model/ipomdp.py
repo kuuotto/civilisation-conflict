@@ -474,6 +474,7 @@ def sample_observation(
 
     return observation
 
+
 def uniform_initial_belief(
     n_samples: int, model: universe.Universe, agent: civilisation.Civilisation = None
 ) -> ipomdp_solver.Belief:
@@ -543,6 +544,123 @@ def uniform_initial_belief(
         sample[:, agent.id, :] = agent.get_state()
 
     return sample
+
+
+def surpass_scenario_initial_belief(
+    n_samples: int,
+    level: int,
+    model: universe.Universe,
+) -> ipomdp_solver.Belief:
+    """
+    In this two-agent scenario, agent 0 is stronger than agent 1 (and can reach \
+    agent 1).
+
+    The samples will be generated such that:
+    - 0 is stronger than 1
+    - 0 can reach 1
+    - 1 will surpass 0 in technology level within 'time_until_surpass' time steps \ 
+      with probability prob_surpass_{level}
+
+    The parameters time_until_surpass and prob_surpass_{0, 1} can be accessed through \
+    the model.initial_belief_params dictionary
+    
+    NOTE: This algorithm is extremely inefficient, but should be okay compared to
+    planning time.
+    """
+    assert model.n_agents == 2
+    assert level in (0, 1)
+
+    # initialise array of samples
+    n_agents = 2
+    samples = np.zeros((n_samples, n_agents, model.agent_state_size))
+
+    # determine ranges for growth parameters
+    if model.agent_growth == growth.sigmoid_growth:
+        if (
+            "speed" in model.agent_growth_params
+            and "takeoff_time" in model.agent_growth_params
+        ):
+            # every agent has the same growth parameters
+            speed_range = (
+                model.agent_growth_params["speed"],
+                model.agent_growth_params["speed"],
+            )
+            takeoff_time_range = (
+                model.agent_growth_params["takeoff_time"],
+                model.agent_growth_params["takeoff_time"],
+            )
+        elif (
+            "speed_range" in model.agent_growth_params
+            and "takeoff_time_range" in model.agent_growth_params
+        ):
+            # growth parameters are sampled from the given ranges
+            speed_range = model.agent_growth_params["speed_range"]
+            takeoff_time_range = model.agent_growth_params["takeoff_time_range"]
+        else:
+            raise Exception("Sigmoid growth parameters are incorrect")
+    else:
+        raise NotImplementedError()
+
+    prob_surpass = model.initial_belief_params[f"prob_surpass_{level}"]
+    time_until_surpass = model.initial_belief_params["time_until_surpass"]
+
+    # whether to generate a sample where a surpass happens next time. We decide what
+    # kind of sample to generate before sampling and rejecting to avoid bias.
+    generate_surpass = model.random.random() < prob_surpass
+
+    # number of samples generated so far
+    n_generated = 0
+
+    while n_generated < n_samples:
+        ### generate a random sample
+
+        # age
+        samples[n_generated, :, 0] = model.rng.integers(
+            *model.init_age_belief_range, size=n_agents, endpoint=True
+        )
+
+        # visibility factor
+        samples[n_generated, :, 1] = model.rng.uniform(
+            *model.init_visibility_belief_range, size=n_agents
+        )
+
+        # growth speed
+        samples[n_generated, :, 2] = model.rng.uniform(*speed_range, size=n_agents)
+
+        # growth takeoff age
+        samples[n_generated, :, 3] = model.rng.integers(
+            *takeoff_time_range, size=n_agents, endpoint=True
+        )
+
+        ### Check that the conditions hold
+        # 1. 0 is stronger than 1
+        tech_levels = growth.tech_level(samples[n_generated], model=model)
+
+        if tech_levels[0] < tech_levels[1]:
+            continue
+
+        # 2. 0 can reach 1
+        can_reach = model.is_neighbour(
+            agent1=model.agents[0], agent2=model.agents[1], tech_level=tech_levels[0]
+        )
+        if not can_reach:
+            continue
+
+        # 3. 1 will surpass 0
+        samples[n_generated, :, 0] += time_until_surpass
+        future_tech_levels = growth.tech_level(samples[n_generated], model=model)
+        samples[n_generated, :, 0] -= time_until_surpass
+
+        if generate_surpass and future_tech_levels[1] < future_tech_levels[0]:
+            continue
+        elif not generate_surpass and future_tech_levels[1] > future_tech_levels[0]:
+            continue
+
+        # we accept the new sample. We also decide which kind of sample to generate next
+        generate_surpass = model.random.random() < prob_surpass
+        n_generated += 1
+
+    return samples
 
 
 def rollout(
