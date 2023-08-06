@@ -549,19 +549,21 @@ def sample_init(
 def rollout(
     state: ipomdp_solver.State,
     agent: civilisation.Civilisation,
+    frame: ipomdp_solver.Frame,
     model: universe.Universe,
     depth: int = 0,
 ) -> float:
     """
     Starting from the given model state, use random actions to propagate
     the state forward until the discount horizon is reached. Returns
-    the value.
+    the value. Rewards are calculated using the supplied frame.
 
     NOTE: state is mutated in place for efficiency.
 
     Keyword arguments:
     state: the state to start the rollout in
     agent: the agent whose reward is of interest
+    frame: the frame to use to calculate the rewards
     model: a Universe.
     depth: the number of steps we have rolled out so far
     """
@@ -582,13 +584,21 @@ def rollout(
     action = (actor, actor_action)
 
     # calculate value of taking action in state
-    value = reward(state=state, action_=action, agent=agent, model=model)
+    value = reward(
+        state=state,
+        action_=action,
+        agent=agent,
+        model=model,
+        attack_reward=frame["attack_reward"],
+    )
 
     # propagate state
     next_state = transition(state=state, action_=action, model=model, in_place=True)
 
     # continue rollout from the propagated state
-    next_value = rollout(state=next_state, agent=agent, model=model, depth=depth + 1)
+    next_value = rollout(
+        state=next_state, agent=agent, frame=frame, model=model, depth=depth + 1
+    )
 
     return value + model.discount_factor * next_value
 
