@@ -326,18 +326,19 @@ class BeliefForest:
             )
 
             # report the proportions of particles with different models
-            other_agents = tuple(ag for ag in model.agents if ag != self.owner)
-            prob_indifferent = {other_agent: 0 for other_agent in other_agents}
-            for particle in new_root_node.particles:
-                for other_agent in other_agents:
-                    if (
-                        particle.other_agent_frames[other_agent.id]["attack_reward"]
-                        == 0
-                    ):
-                        prob_indifferent[other_agent] += particle.weight
-            print(
-                f"In {self.top_level_tree}, {prob_indifferent} of weight is given to indifferent models of the other agents"
-            )
+            if self.owner.level > 0:
+                other_agents = tuple(ag for ag in model.agents if ag != self.owner)
+                prob_indifferent = {other_agent: 0 for other_agent in other_agents}
+                for particle in new_root_node.particles:
+                    for other_agent in other_agents:
+                        if (
+                            particle.other_agent_frames[other_agent.id]["attack_reward"]
+                            == 0
+                        ):
+                            prob_indifferent[other_agent] += particle.weight
+                print(
+                    f"In {self.top_level_tree}, {prob_indifferent} of weight is given to indifferent models of the other agents"
+                )
 
         ### 2. update the beliefs in the child trees recursively
 
@@ -685,7 +686,9 @@ class Tree:
 
             # make a copy because rollout changes state in place
             start_state = particle.state.copy()
-            value = ipomdp.rollout(state=start_state, agent=self.agent, model=model)
+            value = ipomdp.rollout(
+                state=start_state, agent=self.agent, frame=node.frame, model=model
+            )
 
             # add the new particle (it will have no expansions)
             if not discount_horizon_reached:
@@ -942,10 +945,7 @@ class Tree:
                 len(self.root_nodes),
                 sorted(
                     list(
-                        (
-                            len(n.particles),
-                            n.agent_action_history[-1],
-                        )
+                        (len(n.particles), n.agent_action_history[-1], n.frame)
                         for n in self.root_nodes
                     ),
                     key=lambda x: x[0],
