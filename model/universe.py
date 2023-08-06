@@ -19,6 +19,7 @@ class Universe(mesa.Model):
         obs_self_noise_sd,
         reasoning_level,
         action_dist_0,
+        initial_belief,
         discount_factor,
         discount_epsilon,
         exploration_coef,
@@ -62,6 +63,8 @@ class Universe(mesa.Model):
                        trees use this to determine the actions of others when \
                        planning. "random" means the others' actions are \
                        chosen uniformly over the set of possible choices.
+        initial_belief: defines the function used to generate initial beliefs. \
+                        Currently supports "uniform".
         discount_factor: how much future time steps are discounted when \
                          determining the rational actions of agents
         discount_epsilon: how small the value discount_factor ** time has to \
@@ -108,6 +111,7 @@ class Universe(mesa.Model):
         self.obs_self_noise_sd = obs_self_noise_sd
         self.reasoning_level = reasoning_level
         self.action_dist_0 = action_dist_0
+        self.initial_belief = initial_belief
         self.discount_factor = discount_factor
         self.discount_epsilon = discount_epsilon
         self.exploration_coef = exploration_coef

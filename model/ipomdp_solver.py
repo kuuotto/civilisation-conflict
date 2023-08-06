@@ -1269,11 +1269,14 @@ class Node:
         # sample initial states
         # If the tree is the top-level tree, the agent's state is used to
         # constrain the initial belief as the agent is certain about its own state.
-        initial_particle_states = ipomdp.sample_init(
-            n_samples=n_particles,
-            model=model,
-            agent=self.tree.agent if in_top_level_tree else None,
-        )
+        if model.initial_belief == "uniform":
+            initial_particle_states = ipomdp.uniform_initial_belief(
+                n_samples=n_particles,
+                model=model,
+                agent=self.tree.agent if in_top_level_tree else None,
+            )
+        else:
+            raise Exception(f"Unrecognised initial belief '{model.initial_belief}'")
 
         # create particles
         particles = [
