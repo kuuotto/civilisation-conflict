@@ -21,6 +21,7 @@ def create_small_universe(**kwargs):
         "obs_self_noise_sd": 0.03,
         "reasoning_level": 2,
         "action_dist_0": "random",
+        "initial_belief": "uniform",  # can be "uniform",
         "discount_factor": 0.9,
         "discount_epsilon": 0.05,
         "exploration_coef": 1,

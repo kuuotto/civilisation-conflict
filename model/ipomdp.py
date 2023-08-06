@@ -474,13 +474,12 @@ def sample_observation(
 
     return observation
 
-
-def sample_init(
+def uniform_initial_belief(
     n_samples: int, model: universe.Universe, agent: civilisation.Civilisation = None
 ) -> ipomdp_solver.Belief:
     """
-    Generates n_samples samples of the initial belief. These samples are used
-    to represent the initial belief distribution of agents.
+    Generates n_samples samples of the initial belief. Assumes a uniform distribution
+    over possible ranges of variables, independently for each agent and variable.
 
     Keyword arguments:
     n_samples: the number of samples to return

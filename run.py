@@ -25,6 +25,7 @@ params = {
     "obs_self_noise_sd": 0.15,
     "reasoning_level": 2,
     "action_dist_0": "random",  # can be "random", "passive" or "aggressive"
+    "initial_belief": "uniform",  # can be "uniform",
     "discount_factor": 0.6,
     "discount_epsilon": 0.10,
     "exploration_coef": 0.1,
