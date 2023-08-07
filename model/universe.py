@@ -225,7 +225,7 @@ class Universe(mesa.Model):
                     "attack_successful",
                 ],
                 "rewards": ["time", "agent", "reward"],
-                "action_qualities": ["time", "estimator", "actor", "qualities"],
+                "action_qualities": ["time", "estimator", "actor", "qualities", "n_expansions"],
             },
         )
 
