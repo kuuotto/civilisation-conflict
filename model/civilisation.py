@@ -264,6 +264,7 @@ class Civilisation(mesa.Agent):
         Stores:
         - the estimated action qualities of agent's own actions
         - the estimated action qualities of others' actions
+        - number of times simulated for each
         """
         # determine own estimated action qualities
         root_node = self.forest.top_level_tree_root_node
@@ -276,6 +277,8 @@ class Civilisation(mesa.Agent):
             exploration_coef=0,
         )
 
+        n_expansions = root_node.n_expansions_act.sum(axis=0)
+
         # store
         self.model.datacollector.add_table_row(
             table_name="action_qualities",
@@ -284,6 +287,7 @@ class Civilisation(mesa.Agent):
                 "estimator": self.id,
                 "actor": self.id,
                 "qualities": action_qualities,
+                "n_expansions": n_expansions,
             },
         )
 
@@ -334,6 +338,7 @@ class Civilisation(mesa.Agent):
                     "estimator": self.id,
                     "actor": other_agent.id,
                     "qualities": action_qualities,
+                    "n_expansions": None,
                 },
             )
 
