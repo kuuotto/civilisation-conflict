@@ -144,7 +144,7 @@ class Universe(mesa.Model):
             self,
             update_methods=["step_update_beliefs", "step_plan"],
             step_method="step_act",
-            log_methods=["step_log_reward", "step_log_estimated_action_qualities"],
+            log_methods=["step_log_estimated_action_qualities"],
         )
         self.space = mesa.space.ContinuousSpace(x_max=1, y_max=1, torus=toroidal_space)
 
@@ -201,8 +201,9 @@ class Universe(mesa.Model):
         self._state = None
 
         # after all agents have been created, initialise their trees
-        for agent in self.agents:
-            agent.initialise_forest()
+        if self.decision_making == "ipomdp":
+            for agent in self.agents:
+                agent.initialise_forest()
 
         # initialise data collection
         self.datacollector = mesa.DataCollector(
@@ -272,14 +273,16 @@ class Universe(mesa.Model):
         action_ = tuple(agent.choose_action() for agent in self.agents)
 
         # determine result of action
-        new_state = ipomdp.transition(self.get_state(), action_=action_, model=self)
+        new_state, rewards = ipomdp.transition(
+            self.get_state(), action_=action_, model=self
+        )
 
         # destroyed agents
         result_description = ["-" for agent in self.agents]
 
         # store the values in the new state
-        for agent, agent_action, new_agent_state in zip(
-            self.agents, action_, new_state
+        for agent, agent_action, new_agent_state, agent_reward in zip(
+            self.agents, action_, new_state, rewards, strict=True
         ):
             ### Update agent's state
 
@@ -328,6 +331,8 @@ class Universe(mesa.Model):
                     agent2=target,
                     tech_level=previous_tech_levels[agent.id],
                 ):
+                    # Note: result may be true even if agent itself is not strong enough
+                    # to destroy the target if someone else destroys target
                     result = new_state[target.id, 0] == 0
 
                 self.datacollector.add_table_row(
@@ -340,6 +345,16 @@ class Universe(mesa.Model):
                         "attack_successful": result,
                     },
                 )
+
+            ### Log agent's reward
+            self.datacollector.add_table_row(
+                table_name="rewards",
+                row={
+                    "time": self.schedule.time,
+                    "agent": agent.id,
+                    "reward": agent_reward,
+                },
+            )
 
         if self.debug >= 1:
             print(
@@ -419,7 +434,7 @@ class Universe(mesa.Model):
         a NumPy array of shape (n, k), where k is the length of the state
         description of a single agent
         """
-        if self._state == None:
+        if self._state is None:
             self._state = np.zeros((self.n_agents, self.agent_state_size))
 
         for i, agent in enumerate(self.agents):

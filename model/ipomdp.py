@@ -3,7 +3,7 @@
 # avoids having to give type annotations as strings
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Tuple
 
 if TYPE_CHECKING:
     # avoid circular imports with type hints
@@ -35,20 +35,16 @@ def transition(
     state: ipomdp_solver.State,
     action_: ipomdp_solver.Action,
     model: universe.Universe,
+    frame: ipomdp_solver.Frame = None,
     in_place=False,
-) -> ipomdp_solver.State:
+) -> Tuple[ipomdp_solver.State, Tuple[float, ...]]:
     """
     Given a model state and an action, this function samples from the
-    distribution of all possible future states. In practice a (state, action)
-    combination only has one possible future state, except in the case of
-    equally matched target and attacker, in which case the target is
-    destoryed with a 0.5 probability (although note that that can only happen
-    if tech levels are discrete, which they currently are not). This can be
-    used as the transition function for all agents, as they all have the same
-    transition model.
+    distribution of all possible future states. It also returns the rewards for all
+    agents. In practice a (state, action) combination only has one possible future state.
 
-    The random number generator of the model (the rng attribute) is used for
-    random choices.
+    This can be used as the transition function for all agents, as they all have the same
+    transition model.
 
     Keyword arguments:
     state: representation of the system at time t-1. a NumPy array of size
@@ -56,117 +52,71 @@ def transition(
            representation (k=4 for sigmoid growth).
     action_: the action performed
     model: a Universe
+    frame: the frame used for reward calculation
     in_place: boolean, whether to change the state object directly
 
     Returns:
-    A possible system state at time t. A NumPy array of the same shape as
-    the state argument.
+    The system state at time t and rewards for each agent
     """
     # copy state so we don't change original
     if not in_place:
         state = state.copy()
 
-    actor, actor_action = action_
+    # get the appropriate attack reward
+    attack_reward = (
+        model.rewards["destroyed"] if frame is None else frame["attack_reward"]
+    )
 
-    if actor_action == action.HIDE:
-        # if actor hides, additionally update their visibility
-        state[actor.id, 1] *= model.visibility_multiplier
+    # tech levels before the action. This is only calculated if at least one of the
+    # agent actions is an attack. Before that, the state cannot change in a way that
+    # would change the tech levels
+    prev_tech_levels = None
 
-    elif isinstance(actor_action, civilisation.Civilisation):
-        # if there is an attack, see if it is successful or not
-        target = actor_action
+    # keep track of rewards (can also be used to check which agents have been destroyed)
+    rewards = [0 for agent in model.agents]
 
-        # calculate tech levels of actor and target
-        tech_levels = growth.tech_level(state=state, model=model)
+    for agent, agent_action in zip(model.agents, action_, strict=True):
+        if agent_action == action.HIDE:
+            # if agent has already been destroyed
+            agent_destroyed = rewards[agent.id] == model.rewards["destroyed"]
 
-        # determine if actor is capable of attacking target
-        actor_capable = model.is_neighbour(
-            agent1=actor, agent2=target, tech_level=tech_levels[actor.id]
-        )
+            # reward for hiding
+            rewards[agent.id] += model.rewards["hide"]
 
-        if actor_capable and tech_levels[actor.id] > tech_levels[target.id]:  # or (
-            # actor_capable
-            # and tech_levels[actor.id] == tech_levels[target.id]
-            # and model.rng.random() > 0.5
-            # ):
-            # civilisation is destroyed
-            state[target.id, 0] = -1  # reset time
-            state[target.id, 1] = 1  # visibility factor
+            # if agent is already destroyed by someone else, hiding doesn't do anything
+            if agent_destroyed:
+                continue
 
-    elif actor_action != action.NO_ACTION:
-        print(action_, actor, actor_action)
-        raise Exception("Incorrect action format")
+            # if actor hides, additionally update their visibility
+            state[agent.id, 1] *= model.visibility_multiplier
+
+        elif isinstance(agent_action, civilisation.Civilisation):
+            # calculate previous tech levels if they have not yet been calculated
+            if prev_tech_levels is None:
+                prev_tech_levels = growth.tech_level(state=state, model=model)
+
+            ### See if the attack is successful
+            target = agent_action
+
+            # determine if actor is capable of attacking target
+            actor_capable = model.is_neighbour(
+                agent1=agent, agent2=target, tech_level=prev_tech_levels[agent.id]
+            )
+
+            if (
+                actor_capable
+                and prev_tech_levels[agent.id] > prev_tech_levels[target.id]
+            ):
+                # civilisation is destroyed
+                state[target.id, 0] = -1  # reset time
+                state[target.id, 1] = 1  # visibility factor
+                rewards[target.id] += model.rewards["destroyed"]
+                rewards[agent.id] += attack_reward
 
     # always tick everyone's time by one
     state[:, 0] += 1
 
-    return state
-
-
-def reward(
-    state: ipomdp_solver.State,
-    action_: ipomdp_solver.Action,
-    agent: civilisation.Civilisation,
-    model: universe.Universe,
-    attack_reward: float = None,
-) -> float:
-    """
-    Given the current environment state and an action taken in that state,
-    this function calculates the reward for an agent.
-
-    Keyword arguments:
-    state: the current environment state
-    action: the action taken in the state
-    agent: the Civilisation whose reward we want to calculate
-    model: a Universe
-    attack_reward: can be used to override the reward for attacking
-    """
-    actor, actor_action = action_
-
-    # if agent hides, return cost
-    if actor_action == action.HIDE and actor == agent:
-        return model.rewards["hide"]
-
-    # if someone else hides or the action (by anyone) is no action, reward for
-    # agent is 0
-    if actor_action == action.HIDE or actor_action == action.NO_ACTION:
-        return 0
-
-    # now we know that the action is an attack
-    assert isinstance(actor_action, civilisation.Civilisation)
-
-    target = actor_action
-
-    # if agent is not the target nor the actor, it is not interested
-    if agent != target and agent != actor:
-        return 0
-
-    # calculate tech levels of actor and target
-    tech_levels = growth.tech_level(state=state, model=model)
-
-    # determine if actor is capable of attacking target
-    actor_capable = model.is_neighbour(
-        agent1=actor, agent2=target, tech_level=tech_levels[actor.id]
-    )
-
-    # if the actor is not capable of attacking, it's as if the attack never
-    # takes place
-    if not actor_capable:
-        return 0
-
-    # if agent attacks, return the cost
-    if actor == agent:
-        return model.rewards["attack"] if attack_reward is None else attack_reward
-
-    # now we know that agent was attacked
-
-    if tech_levels[target.id] < tech_levels[actor.id]:
-        return model.rewards["destroyed"]
-    elif tech_levels[target.id] == tech_levels[actor.id]:
-        return model.rewards["destroyed"] / 2
-
-    # the tech level of the actor was higher than ours, we are not destroyed
-    return 0
+    return state, rewards
 
 
 def prob_observation(
@@ -693,35 +643,30 @@ def rollout(
     if model.discount_factor**depth < model.discount_epsilon:
         return 0
 
-    # choose actor
-    actor = model.random.choice(model.agents)
+    # choose actions
+    action = []
 
-    # choose action (random if we choose, default policy for other actors)
-    if (actor == agent) or (actor != agent and model.action_dist_0 == "random"):
-        actor_action = model.random.choice(actor.possible_actions(state=state))
-    else:
-        actor_action = level0_opponent_policy(agent=actor, model=model)
+    for actor in model.agents:
+        # choose action (random if we choose, default policy for other actors)
+        if (actor == agent) or (actor != agent and model.action_dist_0 == "random"):
+            actor_action = model.random.choice(actor.possible_actions(state=state))
+        else:
+            actor_action = level0_opponent_policy(agent=actor, model=model)
 
-    action = (actor, actor_action)
-
-    # calculate value of taking action in state
-    value = reward(
-        state=state,
-        action_=action,
-        agent=agent,
-        model=model,
-        attack_reward=frame["attack_reward"],
-    )
+        action.append(actor_action)
 
     # propagate state
-    next_state = transition(state=state, action_=action, model=model, in_place=True)
+    next_state, rewards = transition(
+        state=state, action_=tuple(action), model=model, frame=frame, in_place=True
+    )
+    agent_reward = rewards[agent.id]
 
     # continue rollout from the propagated state
     next_value = rollout(
         state=next_state, agent=agent, frame=frame, model=model, depth=depth + 1
     )
 
-    return value + model.discount_factor * next_value
+    return agent_reward + model.discount_factor * next_value
 
 
 def level0_opponent_policy(

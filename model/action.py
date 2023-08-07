@@ -1,2 +1,2 @@
-NO_ACTION = -1
-HIDE = -2
+NO_ACTION = 0
+HIDE = 1

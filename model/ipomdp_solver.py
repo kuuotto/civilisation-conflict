@@ -13,10 +13,8 @@ if TYPE_CHECKING:
     # avoid circular imports with type hints
     from model import civilisation, universe
 
-    AgentAction = Union[
-        action.NO_TURN, action.NO_ACTION, action.HIDE, civilisation.Civilisation
-    ]
-    Action = Tuple[civilisation.Civilisation, AgentAction]
+    AgentAction = Union[action.NO_ACTION, action.HIDE, civilisation.Civilisation]
+    Action = Tuple[AgentAction, ...]  # length n_agents
     JointActionHistory = Tuple[Action, ...]
     AgentActionHistory = Tuple[AgentAction, ...]
     TreeSignature = Tuple[civilisation.Civilisation, ...]

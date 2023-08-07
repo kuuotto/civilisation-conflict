@@ -78,6 +78,14 @@ class Civilisation(mesa.Agent):
             agent=self, tech_level=agent_tech_level
         ) + (action.HIDE, action.NO_ACTION)
 
+    @property
+    def tech_level(self) -> float:
+        return growth.tech_level(state=self.get_state(), model=self.model)
+
+    @property
+    def influence_radius(self) -> float:
+        return growth.influence_radius(self.tech_level)
+
     def step_update_beliefs(self):
         """
         Update beliefs regarding technology level and hostility of
@@ -134,24 +142,6 @@ class Civilisation(mesa.Agent):
             raise NotImplementedError("Only 'random' and 'ipomdp' are supported")
 
         return agent_action
-
-    def step_log_reward(self):
-        """
-        Stores the reward received by agent at the end of a turn.
-        """
-        # calculate reward
-        reward = ipomdp.reward(
-            state=self.model.previous_state,
-            action_=self.model.previous_action,
-            agent=self,
-            model=self.model,
-        )
-
-        # store
-        self.model.datacollector.add_table_row(
-            table_name="rewards",
-            row={"time": self.model.schedule.time, "agent": self.id, "reward": reward},
-        )
 
     def step_log_estimated_action_qualities(self):
         """
