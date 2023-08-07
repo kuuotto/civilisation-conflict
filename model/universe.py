@@ -1,7 +1,7 @@
 import mesa
 import numpy as np
 
-from model import civilisation, growth
+from model import civilisation, growth, ipomdp, action
 from typing import Tuple, List, Any
 
 
@@ -140,9 +140,9 @@ class Universe(mesa.Model):
         self.rng = np.random.default_rng(seed)
 
         # initialise schedule and space
-        self.schedule = SingleActivation(
+        self.schedule = JointActivation(
             self,
-            update_methods=["step_tech_level", "step_update_beliefs", "step_plan"],
+            update_methods=["step_update_beliefs", "step_plan"],
             step_method="step_act",
             log_methods=["step_log_reward", "step_log_estimated_action_qualities"],
         )
@@ -191,18 +191,14 @@ class Universe(mesa.Model):
             self.agents.append(agent)
 
             # place agent in a randomly chosen position
-            # TODO: consider the distribution of stars
             x, y = self.rng.random(size=2)
             self.space.place_agent(agent, (x, y))
 
         # initialise distance cache
         self._init_distance_cache()
 
-        # initialise model state
-        self._init_state()
-
-        # initialise constants used
-        self._init_constants()
+        # initialise state
+        self._state = None
 
         # after all agents have been created, initialise their trees
         for agent in self.agents:
@@ -225,7 +221,13 @@ class Universe(mesa.Model):
                     "attack_successful",
                 ],
                 "rewards": ["time", "agent", "reward"],
-                "action_qualities": ["time", "estimator", "actor", "qualities", "n_expansions"],
+                "action_qualities": [
+                    "time",
+                    "estimator",
+                    "actor",
+                    "qualities",
+                    "n_expansions",
+                ],
             },
         )
 
@@ -256,6 +258,96 @@ class Universe(mesa.Model):
                 return
 
             raise e
+
+    def step_act(self):
+        """
+        Activated once every time step. Asks each agent for an action and progresses
+        the model state.
+        """
+        # store current model state (needed for calculating reward later)
+        self.previous_state = self.get_state()
+        previous_tech_levels = growth.tech_level(state=self.previous_state, model=self)
+
+        # determine action
+        action_ = tuple(agent.choose_action() for agent in self.agents)
+
+        # determine result of action
+        new_state = ipomdp.transition(self.get_state(), action_=action_, model=self)
+
+        # destroyed agents
+        result_description = ["-" for agent in self.agents]
+
+        # store the values in the new state
+        for agent, agent_action, new_agent_state in zip(
+            self.agents, action_, new_state
+        ):
+            ### Update agent's state
+
+            # new agent attributes
+            new_agent_age = new_agent_state[0]
+            new_agent_visibility_factor = new_agent_state[1]
+            new_agent_growth_speed = new_agent_state[2]
+            new_agent_takeoff_time = new_agent_state[3]
+
+            # growth speed and takeoff time should not change
+            assert new_agent_growth_speed == agent.get_state()[2]
+            assert new_agent_takeoff_time == agent.get_state()[3]
+
+            # agent got destroyed
+            if new_agent_age == 0:
+                agent.reset_time = self.schedule.time + 1
+
+                # when an agent is destroyed, its visibility factor should be reset
+                assert new_agent_visibility_factor == 1
+
+                # update description
+                result_description[agent.id] = "d"
+
+            agent.visibility_factor = new_agent_visibility_factor
+
+            ### Log agent's own action
+            if agent_action in (action.NO_ACTION, action.HIDE):
+                self.datacollector.add_table_row(
+                    "actions",
+                    {
+                        "time": self.schedule.time,
+                        "actor": agent.id,
+                        "action": agent_action,
+                    },
+                    ignore_missing=True,
+                )
+
+            else:
+                # agent attacked
+                target = agent_action
+
+                # determine result. Attack only takes place if agent can reach target
+                result = None
+                if self.is_neighbour(
+                    agent1=agent,
+                    agent2=target,
+                    tech_level=previous_tech_levels[agent.id],
+                ):
+                    result = new_state[target.id, 0] == 0
+
+                self.datacollector.add_table_row(
+                    "actions",
+                    {
+                        "time": self.schedule.time,
+                        "actor": agent.id,
+                        "action": "a",
+                        "attack_target": target.id,
+                        "attack_successful": result,
+                    },
+                )
+
+        if self.debug >= 1:
+            print(
+                f"t = {self.schedule.time}: actions {action_}, result {tuple(result_description)}"
+            )
+
+        # store previous action (will be used to generate observations on next time step)
+        self.previous_action = action_
 
     def add_log_event(self, event_type: int, event_data: Any) -> None:
         """
@@ -319,13 +411,6 @@ class Universe(mesa.Model):
                 "it does not exist.",
             )
 
-    def _init_state(self):
-        """Initialise model state"""
-        # get length of state of individual agent
-        agent_state_len = self.schedule.agents[0]._state.size
-        num_agents = len(self.schedule.agents)
-        self._state = np.zeros((num_agents, agent_state_len))
-
     def get_state(self):
         """
         Update and return the current model state.
@@ -334,16 +419,13 @@ class Universe(mesa.Model):
         a NumPy array of shape (n, k), where k is the length of the state
         description of a single agent
         """
+        if self._state == None:
+            self._state = np.zeros((self.n_agents, self.agent_state_size))
+
         for i, agent in enumerate(self.agents):
             self._state[i] = agent.get_state()
 
         return self._state
-
-    def _init_constants(self) -> None:
-        """
-        Pre-calculates some constants used in the I-POMDP solver.
-        """
-        # self.obs_prob_const = ipomdp._norm_pdf(x=0, mean=0, sd=self.obs_noise_sd)
 
     def _init_distance_cache(self) -> None:
         """
@@ -418,12 +500,14 @@ class Universe(mesa.Model):
         raise Exception("Either a radius or a technology level must be supplied.")
 
 
-class SingleActivation(mesa.time.BaseScheduler):
+class JointActivation(mesa.time.BaseScheduler):
     """
     A scheduler which first calls the update method(s) for every agent (if
     there are multiple, this is done in stages: the first update method
-    is executed for every agent before moving on to the next). Finally,
-    a random agent is activated to perform a step method.
+    is executed for every agent before moving on to the next). Then, the step method
+    of the Universe is called, which gets an action from every agent and progresses
+    the model state. Finally, the log methods of each agent are called (staged, like
+    before).
     """
 
     def __init__(
@@ -440,8 +524,8 @@ class SingleActivation(mesa.time.BaseScheduler):
             model: Model object associated with the schedule.
             update_methods: List of strings of names of stages to run, in the
                             order to run them in.
-            step_method: The name of the step method to be activated in a
-                         single randomly chosen agent.
+            step_method: The name of the step method to be activated in the model
+                         object.
             log_methods: List of strings of names of stages to run after step_method,
                          in the order to run them in.
         """
@@ -471,9 +555,8 @@ class SingleActivation(mesa.time.BaseScheduler):
             # in the previous loop.
             agent_keys = list(self._agents.keys())
 
-        # choose a random agent to step
-        agent = self.model.random.choice(agent_keys)
-        getattr(self._agents[agent], self.step_method)()
+        # call the model's step function
+        getattr(self.model, self.step_method)()
 
         # run log methods in stages for all agents
         for log_method in self.log_methods:

@@ -48,12 +48,6 @@ class Civilisation(mesa.Agent):
         # agent state will be initialised elsewhere
         self._state = None
 
-        # initialise own tech level
-        self.step_tech_level()
-
-        # keep track of previous action
-        self.previous_agent_action = action.NO_TURN
-
         # store the set of possible actions for this agent (will be determined once
         # it is requested)
         self._action_set = None
@@ -62,12 +56,6 @@ class Civilisation(mesa.Agent):
         """Create belief trees"""
         self.forest = ipomdp_solver.BeliefForest(owner=self)
 
-    def _init_action_set(self):
-        self._action_set = tuple(ag for ag in self.model.agents if ag != self) + (
-            action.HIDE,
-            action.NO_ACTION,
-        )
-
     def possible_actions(self, state=None):
         """
         Return all possible actions of agent. State can be supplied to
@@ -75,24 +63,20 @@ class Civilisation(mesa.Agent):
         capable of.
         """
         if self._action_set is None:
-            self._init_action_set()
+            self._action_set = tuple(ag for ag in self.model.agents if ag != self) + (
+                action.HIDE,
+                action.NO_ACTION,
+            )
 
         if state is None:
             return self._action_set
 
+        # determine possible actions depending on state
         agent_tech_level = growth.tech_level(state=state[self.id], model=self.model)
 
-        return (action.NO_ACTION, action.HIDE) + self.model.get_agent_neighbours(
+        return self.model.get_agent_neighbours(
             agent=self, tech_level=agent_tech_level
-        )
-
-    def step_tech_level(self):
-        """Update own tech level"""
-        new_tech_level = growth.tech_level(state=self.get_state(), model=self.model)
-
-        # update tech level and calculate new influence radius
-        self.tech_level = new_tech_level
-        self.influence_radius = growth.influence_radius(new_tech_level)
+        ) + (action.HIDE, action.NO_ACTION)
 
     def step_update_beliefs(self):
         """
@@ -116,11 +100,8 @@ class Civilisation(mesa.Agent):
 
         # update beliefs
         self.forest.update_beliefs(
-            owner_action=self.previous_agent_action, owner_observation=obs
+            owner_action=self.model.previous_action[self.id], owner_observation=obs
         )
-
-        # previous action is no longer needed
-        self.previous_agent_action = action.NO_TURN
 
     def step_plan(self):
         """
@@ -131,7 +112,7 @@ class Civilisation(mesa.Agent):
 
         self.forest.plan()
 
-    def step_act(self):
+    def choose_action(self):
         """
         The agent chooses an action. Possible actions include attacking a
         neighbour, decreasing the civilisation's own technosignature (technology
@@ -142,7 +123,7 @@ class Civilisation(mesa.Agent):
         - "random"
         - "ipomdp"
         """
-        ### 1. Choose an action
+        ### Choose an action
         if self.model.decision_making == "ipomdp":
             agent_action = self.forest.optimal_action()
 
@@ -152,94 +133,7 @@ class Civilisation(mesa.Agent):
         else:
             raise NotImplementedError("Only 'random' and 'ipomdp' are supported")
 
-        # store current model state (needed for calculating reward later)
-        self.model.previous_state = self.model.get_state()
-
-        ### 2. Perform and log action
-
-        if isinstance(agent_action, Civilisation):
-            target = agent_action
-
-            # check if attacker can reach us
-            attacker_capable = self.model.is_neighbour(
-                agent1=self, agent2=target, radius=self.influence_radius
-            )
-
-            # whether attack was successful
-            result = False
-
-            if not attacker_capable:
-                self.dprint(f"Tries to attack {target} but they are out of reach")
-                result = None
-
-            elif self.tech_level > target.tech_level or (
-                self.tech_level == target.tech_level and self.rng.random() > 0.5
-            ):
-                # civilisation is destroyed
-                self.dprint(
-                    f"Successfully attacks {target} ({self.tech_level:.3f}",
-                    f"> {target.tech_level:.3f})",
-                )
-
-                target.reset_time = self.model.schedule.time + 1
-                target.visibility_factor = 1
-                target.step_tech_level()
-
-                result = True
-            else:
-                # failed attack
-                self.dprint(
-                    f"Unsuccessfully attacks {target} ({self.tech_level:.3f}",
-                    f"< {target.tech_level:.3f})",
-                )
-
-            # log attack
-            self.model.datacollector.add_table_row(
-                "actions",
-                {
-                    "time": self.model.schedule.time,
-                    "actor": self.id,
-                    "action": "a",
-                    "attack_target": target.id,
-                    "attack_successful": result,
-                },
-            )
-
-        elif agent_action == action.HIDE:
-            self.visibility_factor *= self.model.visibility_multiplier
-
-            self.dprint(
-                f"Hides (tech level {self.tech_level:.3f},",
-                f"visibility {self.visibility_factor:.3f})",
-            )
-            self.model.datacollector.add_table_row(
-                "actions",
-                {
-                    "time": self.model.schedule.time,
-                    "actor": self.id,
-                    "action": action.HIDE,
-                },
-                ignore_missing=True,
-            )
-
-        elif agent_action == action.NO_ACTION:
-            self.dprint("-")
-            # log
-            self.model.datacollector.add_table_row(
-                "actions",
-                {
-                    "time": self.model.schedule.time,
-                    "actor": self.id,
-                    "action": action.NO_ACTION,
-                },
-                ignore_missing=True,
-            )
-
-        else:
-            raise Exception("Unrecognised action")
-
-        self.previous_agent_action = agent_action
-        self.model.previous_action = (self, agent_action)
+        return agent_action
 
     def step_log_reward(self):
         """
@@ -266,6 +160,9 @@ class Civilisation(mesa.Agent):
         - the estimated action qualities of others' actions
         - number of times simulated for each
         """
+        if self.model.decision_making != "ipomdp":
+            return
+
         # determine own estimated action qualities
         root_node = self.forest.top_level_tree_root_node
         action_qualities = ipomdp_solver.calculate_action_qualities(
@@ -341,11 +238,6 @@ class Civilisation(mesa.Agent):
                     "n_expansions": None,
                 },
             )
-
-    def dprint(self, *message):
-        """Prints message to the console if debugging flag is on"""
-        if self.model.debug:
-            print(f"t={self.model.schedule.time}, {self.unique_id}:", *message)
 
     def get_state(self):
         """
