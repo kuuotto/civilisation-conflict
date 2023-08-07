@@ -33,7 +33,7 @@ def sigmoid_growth(time, speed, takeoff_time):
     return 1 / (1 + np.exp(exponent))
 
 
-def tech_level(state, model):
+def tech_level(state, model, previous=False):
     """
     Calculate the tech level(s) of the agent(s) in state.
 
@@ -46,10 +46,13 @@ def tech_level(state, model):
             agent state
     model - a Universe with a corresponding agent growth function saved in
             its agent_growth attribute
+    previous - whether to calculate the tech level at previous time step instead
     """
     if model.agent_growth == sigmoid_growth:
         return sigmoid_growth(
-            time=state[..., 0], speed=state[..., 2], takeoff_time=state[..., 3]
+            time=state[..., 0 if previous else 1],
+            speed=state[..., 3],
+            takeoff_time=state[..., 4],
         )
 
     raise NotImplementedError()

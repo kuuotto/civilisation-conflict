@@ -31,9 +31,9 @@ class Civilisation(mesa.Agent):
         # add reference to model's rng
         self.rng = model.rng
 
-        # initialise reset time, which is the “zero time” for this civilisation.
-        # It is set to the current model time if the civilisation is destroyed.
-        self.reset_time = -age
+        # initialise age and previous age
+        self.age = age
+        self.previous_age = age - 1
 
         # initialise visibility factor -- the civilisation can choose to hide
         # which decreases its apparent tech level (=technosignature)
@@ -80,7 +80,7 @@ class Civilisation(mesa.Agent):
 
     @property
     def tech_level(self) -> float:
-        return growth.tech_level(state=self.get_state(), model=self.model)
+        return growth.tech_level(state=self.state, model=self.model)
 
     @property
     def influence_radius(self) -> float:
@@ -229,12 +229,14 @@ class Civilisation(mesa.Agent):
                 },
             )
 
-    def get_state(self):
+    @property
+    def state(self):
         """
         Updates self._state and returns it.
 
-        The state consists of 4 numbers:
-        1. time since last destruction
+        The state consists of 5 numbers:
+        1. previous age (age = time since last destruction)
+        1. current age
         2. visibility factor
         3. growth speed
         4. growth takeoff time
@@ -246,10 +248,11 @@ class Civilisation(mesa.Agent):
             self._state = np.zeros(self.model.agent_state_size)
 
         if self.model.agent_growth == growth.sigmoid_growth:
-            self._state[0] = self.model.schedule.time - self.reset_time
-            self._state[1] = self.visibility_factor
-            self._state[2] = self.agent_growth_params["speed"]
-            self._state[3] = self.agent_growth_params["takeoff_time"]
+            self._state[0] = self.previous_age
+            self._state[1] = self.age
+            self._state[2] = self.visibility_factor
+            self._state[3] = self.agent_growth_params["speed"]
+            self._state[4] = self.agent_growth_params["takeoff_time"]
         else:
             raise NotImplementedError()
 

@@ -132,7 +132,7 @@ class Universe(mesa.Model):
 
         if agent_growth == "sigmoid":
             self.agent_growth = growth.sigmoid_growth
-            self.agent_state_size = 4
+            self.agent_state_size = 5
         else:
             raise NotImplementedError
 
@@ -265,16 +265,18 @@ class Universe(mesa.Model):
         Activated once every time step. Asks each agent for an action and progresses
         the model state.
         """
-        # store current model state (needed for calculating reward later)
-        self.previous_state = self.get_state()
-        previous_tech_levels = growth.tech_level(state=self.previous_state, model=self)
-
         # determine action
         action_ = tuple(agent.choose_action() for agent in self.agents)
 
+        print(self.state)
+
         # determine result of action
-        new_state, rewards = ipomdp.transition(
-            self.get_state(), action_=action_, model=self
+        new_state, rewards = ipomdp.transition(self.state, action_=action_, model=self)
+
+        # calculate previous tech levels (used for determining if a civilisation
+        # could attack another on the previous round)
+        previous_tech_levels = growth.tech_level(
+            state=new_state, model=self, previous=True
         )
 
         # destroyed agents
@@ -287,26 +289,30 @@ class Universe(mesa.Model):
             ### Update agent's state
 
             # new agent attributes
-            new_agent_age = new_agent_state[0]
-            new_agent_visibility_factor = new_agent_state[1]
-            new_agent_growth_speed = new_agent_state[2]
-            new_agent_takeoff_time = new_agent_state[3]
+            new_agent_prev_age = new_agent_state[0]
+            new_agent_age = new_agent_state[1]
+            new_agent_visibility_factor = new_agent_state[2]
+            new_agent_growth_speed = new_agent_state[3]
+            new_agent_takeoff_time = new_agent_state[4]
 
             # growth speed and takeoff time should not change
-            assert new_agent_growth_speed == agent.get_state()[2]
-            assert new_agent_takeoff_time == agent.get_state()[3]
+            assert new_agent_growth_speed == agent.state[3]
+            assert new_agent_takeoff_time == agent.state[4]
+
+            # update age
+            agent.age = new_agent_age
+            agent.previous_age = new_agent_prev_age
+
+            # update visibility factor
+            agent.visibility_factor = new_agent_visibility_factor
 
             # agent got destroyed
             if new_agent_age == 0:
-                agent.reset_time = self.schedule.time + 1
-
                 # when an agent is destroyed, its visibility factor should be reset
                 assert new_agent_visibility_factor == 1
 
                 # update description
                 result_description[agent.id] = "d"
-
-            agent.visibility_factor = new_agent_visibility_factor
 
             ### Log agent's own action
             if agent_action in (action.NO_ACTION, action.HIDE):
@@ -333,7 +339,7 @@ class Universe(mesa.Model):
                 ):
                     # Note: result may be true even if agent itself is not strong enough
                     # to destroy the target if someone else destroys target
-                    result = new_state[target.id, 0] == 0
+                    result = new_state[target.id, 1] == 0
 
                 self.datacollector.add_table_row(
                     "actions",
@@ -426,7 +432,8 @@ class Universe(mesa.Model):
                 "it does not exist.",
             )
 
-    def get_state(self):
+    @property
+    def state(self):
         """
         Update and return the current model state.
 
@@ -438,7 +445,7 @@ class Universe(mesa.Model):
             self._state = np.zeros((self.n_agents, self.agent_state_size))
 
         for i, agent in enumerate(self.agents):
-            self._state[i] = agent.get_state()
+            self._state[i] = agent.state
 
         return self._state
 

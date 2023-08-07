@@ -46,10 +46,12 @@ def transition(
     This can be used as the transition function for all agents, as they all have the same
     transition model.
 
+    NOTE: Assumes that everyone uses the same frame for their rewards.
+
     Keyword arguments:
     state: representation of the system at time t-1. a NumPy array of size
            (n_agents, k), where k is the length of an individual agent state
-           representation (k=4 for sigmoid growth).
+           representation.
     action_: the action performed
     model: a Universe
     frame: the frame used for reward calculation
@@ -68,12 +70,14 @@ def transition(
     )
 
     # tech levels before the action. This is only calculated if at least one of the
-    # agent actions is an attack. Before that, the state cannot change in a way that
-    # would change the tech levels
+    # agent actions is an attack.
     prev_tech_levels = None
 
     # keep track of rewards (can also be used to check which agents have been destroyed)
     rewards = [0 for agent in model.agents]
+
+    # copy over the current ages to the previous ages column
+    state[:, 0] = state[:, 1]
 
     for agent, agent_action in zip(model.agents, action_, strict=True):
         if agent_action == action.HIDE:
@@ -88,12 +92,14 @@ def transition(
                 continue
 
             # if actor hides, additionally update their visibility
-            state[agent.id, 1] *= model.visibility_multiplier
+            state[agent.id, 2] *= model.visibility_multiplier
 
         elif isinstance(agent_action, civilisation.Civilisation):
             # calculate previous tech levels if they have not yet been calculated
             if prev_tech_levels is None:
-                prev_tech_levels = growth.tech_level(state=state, model=model)
+                prev_tech_levels = growth.tech_level(
+                    state=state, model=model, previous=True
+                )
 
             ### See if the attack is successful
             target = agent_action
@@ -108,13 +114,13 @@ def transition(
                 and prev_tech_levels[agent.id] > prev_tech_levels[target.id]
             ):
                 # civilisation is destroyed
-                state[target.id, 0] = -1  # reset time
-                state[target.id, 1] = 1  # visibility factor
+                state[target.id, 1] = -1  # reset age
+                state[target.id, 2] = 1  # reset visibility factor
                 rewards[target.id] += model.rewards["destroyed"]
                 rewards[agent.id] += attack_reward
 
     # always tick everyone's time by one
-    state[:, 0] += 1
+    state[:, 1] += 1
 
     return state, rewards
 
@@ -326,10 +332,10 @@ def sample_observation(
     Returns a single possible observation of “agent” when the system is \
     currently in state “state” and the previous action was “action”. \
     Observations include technosignatures from all civilisations (n_agents \
-    values, where agent's own value is its technology level) and two success \
+    values, where agent's own value is its noisy technology level) and two success \
     bits, the first indicating whether the agent successfully attacked someone \
     last round or not and the second indicating whether the agent itself was \
-    successfully destroyed last round or not.
+    destroyed last round or not.
 
     Model's random number generator (rng attribute) is used for sampling.
 
