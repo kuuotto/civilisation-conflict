@@ -351,82 +351,99 @@ def sample_observation(
            for random sampling.
 
     Returns:
-    The observation. A tuple of length n_agents + 2. 
+    The observation. An array of length n_agents + 2. 
     The n_agents values correspond to technosignatures of civilisations and the
     final two bits are success bits as described above.
-    The first success bit is None if the agent did not attack.
-    The second success bit is None if the agent was not attacked.
+    The first success bit is np.nan if the agent did not attack.
+    The second success bit is np.nan if the agent was not attacked.
     """
+    agent_action = action[agent.id]
 
-    actor, actor_action = action
+    # technology levels at the previous time step are only computed when they are
+    # first needed
+    prev_tech_levels = None
 
     ### determine success bits
-    agent_attacked = agent == actor and isinstance(
-        actor_action, civilisation.Civilisation
-    )
+    ## 1. Check if agent successfully attacked someone
+    agent_attacked = isinstance(agent_action, civilisation.Civilisation)
+    target_destroyed = np.nan
 
     # check if agent was actually capable of attacking last round
     if agent_attacked:
-        target = actor_action
-        prev_agent_state = state[agent.id].copy()
-        prev_agent_state[0] -= 1
-        prev_agent_tech_level = growth.tech_level(state=prev_agent_state, model=model)
+        target = agent_action
+
+        # calculate previous tech levels if necessary
+        if prev_tech_levels is None:
+            prev_tech_levels = growth.tech_level(
+                state=state, model=model, previous=True
+            )
+
         agent_capable = model.is_neighbour(
-            agent1=agent, agent2=target, tech_level=prev_agent_tech_level
+            agent1=agent, agent2=target, tech_level=prev_tech_levels[agent.id]
         )
-        agent_attacked = agent_attacked and agent_capable
 
-    agent_targeted = agent == actor_action
+        if agent_capable:
+            target_destroyed = prev_tech_levels[agent.id] > prev_tech_levels[target.id]
+            if target_destroyed:
+                assert state[target.id, 1] == 0
 
-    # check if actor was actually capable of attacking last round
-    if agent_targeted:
-        prev_actor_state = state[actor.id].copy()
-        prev_actor_state[0] -= 1
-        prev_actor_tech_level = growth.tech_level(state=prev_actor_state, model=model)
-        actor_capable = model.is_neighbour(
-            agent1=actor, agent2=agent, tech_level=prev_actor_tech_level
+    ## 2. Check if agent was destroyed by someone else
+    agent_destroyed = np.nan
+    for other_agent, other_agent_action in zip(model.agents, action, strict=True):
+        if other_agent_action != agent:
+            continue
+
+        # calculate previous tech levels if necessary
+        if prev_tech_levels is None:
+            prev_tech_levels = growth.tech_level(
+                state=state, model=model, previous=True
+            )
+
+        # other_agent tried to attack agent. Let's check the result
+        other_agent_capable = model.is_neighbour(
+            agent1=other_agent,
+            agent2=agent,
+            tech_level=prev_tech_levels[other_agent.id],
         )
-        agent_targeted = agent_targeted and actor_capable
 
-    if agent_attacked:
-        # determine if target was destroyed
-        target_destroyed = state[target.id, 0] == 0
-    else:
-        target_destroyed = None
+        if other_agent_capable:
+            agent_destroyed = (
+                prev_tech_levels[other_agent.id] > prev_tech_levels[agent.id]
+            )
+            if agent_destroyed:
+                assert state[agent.id, 1] == 0
 
-    if agent_targeted:
-        # determine if agent was destroyed
-        agent_destroyed = state[agent.id, 0] == 0
-    else:
-        agent_destroyed = None
+    ### Determine technosignature observations
 
-    # calculate tech levels
+    # initialise observation as noise
+    observation = model.rng.random(size=model.n_agents + 2)
+
+    # store result bits
+    observation[-2] = target_destroyed
+    observation[-1] = agent_destroyed
+
+    # calculate current tech levels
     tech_levels = growth.tech_level(state=state, model=model)
 
     # calculate technosignatures
-    technosignatures = tech_levels * state[:, 1]
+    technosignatures = tech_levels * state[:, 2]
 
-    # find neighbours
-    nbrs = model.get_agent_neighbours(agent=agent, tech_level=tech_levels[agent.id])
-
-    # add noise to agent's own tech level and others' technosignatures
-    orig_tech_levels = tech_levels.copy()
-    tech_levels[agent.id] += model.random.gauss(mu=0, sigma=model.obs_self_noise_sd)
+    # add noise to technosignatures
     technosignatures += model.rng.normal(
         loc=0, scale=model.obs_noise_sd, size=model.n_agents
     )
 
-    observation = tuple(
-        t if ag == agent else (ts if ag in nbrs else model.random.random())
-        for ag, t, ts in zip(model.agents, tech_levels, technosignatures)
+    # find neighbours
+    nbrs = model.get_agent_neighbours(agent=agent, tech_level=tech_levels[agent.id])
+
+    # add neighbours' noisy technosignatures to observation
+    for nbr in nbrs:
+        observation[nbr.id] = technosignatures[nbr.id]
+
+    # add agent's own technology level with noise
+    observation[agent.id] = tech_levels[agent.id] + model.random.gauss(
+        mu=0, sigma=model.obs_self_noise_sd
     )
-
-    # add tech levels of agents to observation to help with debugging. Note that
-    # these values are ignored when calculating probabilities of observations.
-    observation += tuple(orig_tech_levels)
-
-    # add result bits
-    observation += (target_destroyed, agent_destroyed)
 
     return observation
 
