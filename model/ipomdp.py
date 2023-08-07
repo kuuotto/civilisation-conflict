@@ -637,7 +637,11 @@ def surpass_scenario_initial_belief(
         tech_levels = growth.tech_level(samples[n_generated], model=model)
 
         if tech_levels[0] < tech_levels[1]:
-            continue
+            # swap
+            stronger_state = samples[n_generated, 1].copy()
+            weaker_state = samples[n_generated, 0].copy()
+            samples[n_generated, 0] = stronger_state
+            samples[n_generated, 1] = weaker_state
 
         # 2. 0 can reach 1
         can_reach = model.is_neighbour(
@@ -649,7 +653,6 @@ def surpass_scenario_initial_belief(
         # 3. 1 will surpass 0
         samples[n_generated, :, 0] += time_until_surpass
         future_tech_levels = growth.tech_level(samples[n_generated], model=model)
-        samples[n_generated, :, 0] -= time_until_surpass
 
         if generate_surpass and future_tech_levels[1] < future_tech_levels[0]:
             continue
@@ -657,6 +660,7 @@ def surpass_scenario_initial_belief(
             continue
 
         # we accept the new sample. We also decide which kind of sample to generate next
+        samples[n_generated, :, 0] -= time_until_surpass
         generate_surpass = model.random.random() < prob_surpass
         n_generated += 1
 
