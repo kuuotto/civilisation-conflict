@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     AgentActionHistory = Tuple[AgentAction, ...]
     TreeSignature = Tuple[civilisation.Civilisation, ...]
     State = NDArray
-    Observation = Tuple
+    Observation = NDArray  # length n_agents + 2
     Belief = NDArray
     Frame = Dict[str, Any]
 

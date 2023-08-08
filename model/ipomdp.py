@@ -128,8 +128,7 @@ def transition(
 def prob_observation(
     observation: ipomdp_solver.Observation,
     states: NDArray,  # shape (n_states, n_agents, k)
-    prev_action_actor_ids: NDArray,  # shape (n_states,)
-    prev_action_target_ids: NDArray,  # shape (n_states,)
+    attack_target_ids: NDArray,  # shape (n_states, n_agents)
     observer: civilisation.Civilisation,
     model: universe.Universe,
 ):
@@ -140,14 +139,7 @@ def prob_observation(
     # calculate current and previous tech levels
     # these are of shape (n_states, n_agents)
     tech_levels = growth.tech_level(state=states, model=model)
-    states[..., 0] -= 1
-    prev_tech_levels = growth.tech_level(state=states, model=model)
-    states[..., 0] += 1
-
-    # convert observation into an array
-    observation = np.array(observation, dtype=np.float_)
-
-    # assert model.obs_noise_sd == model.obs_self_noise_sd
+    prev_tech_levels = growth.tech_level(state=states, model=model, previous=True)
 
     return _prob_observation(
         observation=observation,
@@ -155,8 +147,7 @@ def prob_observation(
         observer_id=observer.id,
         tech_levels=tech_levels,
         prev_tech_levels=prev_tech_levels,
-        actor_ids=prev_action_actor_ids,
-        attack_target_ids=prev_action_target_ids,
+        attack_target_ids=attack_target_ids,
         distances_tech_level=model._distances_tech_level,
         n_agents=model.n_agents,
         obs_noise_sd=model.obs_noise_sd,
@@ -166,13 +157,12 @@ def prob_observation(
 
 @njit
 def _prob_observation(
-    observation: NDArray,  # shape (n_agents + 2,)
-    states: NDArray,  # shape (n_particles, n_agents, k)
+    observation: ipomdp_solver.Observation,  # shape (n_agents + 2,)
+    states: ipomdp_solver.State,  # shape (n_states, n_agents, k)
     observer_id: int,
-    tech_levels: NDArray,  # shape (n_particles, n_agents)
-    prev_tech_levels: NDArray,  # shape (n_particles, n_agents)
-    actor_ids: NDArray,  # shape (n_particles,)
-    attack_target_ids: NDArray,  # shape (n_particles,)
+    tech_levels: NDArray,  # shape (n_states, n_agents)
+    prev_tech_levels: NDArray,  # shape (n_states, n_agents)
+    attack_target_ids: NDArray,  # shape (n_states, n_agents)
     distances_tech_level: NDArray,  # shape (n_agents, n_agents)
     n_agents: int,
     obs_noise_sd: float,
@@ -181,7 +171,7 @@ def _prob_observation(
     """
     Returns the probability density of a given observation by an observer \
     (represented by its id, "observer_id") given a set of current system states \
-    ("states") and previous actions encoded by "actor_ids" and "attack_target_ids".
+    ("states") and previous attacks encoded by "attack_target_ids".
 
     Technosignature observations from each agent are assumed to have Gaussian \
     observation noise, which has standard deviation obs_noise_sd for observations of \
@@ -197,12 +187,9 @@ def _prob_observation(
     tech_levels: the technology levels of all agents in the states supplied
     prev_tech_levels: the technology levels of all agents at the previous time steps, \
                       calculated using the states
-    actor_ids: an array of the same length as states, each storing the corresponding \
-               actor of the previous action performed
-    attack_target_ids: an array of the same length as states, each storing the \
-                       corresponding target of a possible previous attack action. If \
-                       the previous action was not an attack, the corresponding value \
-                       is np.nan.
+    attack_target_ids: an array of shape (n_states, n_agents), each row storing the \
+                       ids of possible targets of attacks. If an agent's previous \
+                       action was not an attack, the corresponding value is -1.
     distances_tech_level: an array storing the distances between civilisations, \
                           expressed in terms of technology level. This is obtained \
                           from the Universe object.
@@ -218,101 +205,104 @@ def _prob_observation(
     probabilities = np.ones(shape=n_states)
 
     ### 1. determine if the success bits in the observation are correct
+    ### observer's attack bit
 
-    # array of length n_states
-    observer_attacked = (actor_ids == observer_id) & (attack_target_ids != -1)
-    obs_observer_attacked = not np.isnan(observation[-2])
-
-    # check if observer was actually capable of attacking last round
-    for i in range(n_states):
-        if not observer_attacked[i]:
-            continue
-
-        target = attack_target_ids[i]
-
-        prev_observer_tech_level = prev_tech_levels[i, observer_id]
-
-        observer_capable = (
-            distances_tech_level[observer_id, target] < prev_observer_tech_level
-        )
-
-        observer_attacked[i] = observer_attacked[i] & observer_capable
-
-    # observation should agree with the previous action about attacking
-    probabilities *= observer_attacked == obs_observer_attacked
-
-    # observation should agree with the state about the outcome of the attack
+    # observed bit
     obs_attack_successful = observation[-2]
+
+    # calculates the correct observation bit for each state and compares to the
+    # observed one
     for i in range(n_states):
-        if not observer_attacked[i]:
-            continue
+        attack_successful = np.nan
 
-        target = attack_target_ids[i]
-        attack_successful = states[i, target, 0] == 0
+        target_id = attack_target_ids[i, observer_id]
 
-        probabilities[i] *= attack_successful == obs_attack_successful
+        if target_id != -1:
+            # determine if the attack actually took place
+            prev_observer_tech_level = prev_tech_levels[i, observer_id]
 
-    #######
+            observer_capable = (
+                distances_tech_level[observer_id, target_id] < prev_observer_tech_level
+            )
 
-    observer_targeted = attack_target_ids == observer_id
-    obs_agent_targeted = not np.isnan(observation[-1])
+            if observer_capable:
+                # observer was capable, let's see what the result is
+                # note that observer was not necessarily the one who destroyed the
+                # target
+                attack_successful = states[i, target_id, 1] == 0
 
-    # check if actor was actually capable of attacking last round
+        probabilities[i] = attack_successful == obs_attack_successful
+
+    ### observer targeted bit
+
+    obs_attack_on_observer_successful = observation[-1]
+
+    # calculates the correct bit for each state and compares to the observed one
     for i in range(n_states):
-        if not observer_targeted[i]:
-            continue
+        attack_on_observer_successful = np.nan
 
-        actor = actor_ids[i]
+        for other_agent_id in range(n_agents):
+            if other_agent_id == observer_id:
+                continue
 
-        prev_actor_tech_level = prev_tech_levels[i, actor]
+            other_agent_attacked_observer = (
+                attack_target_ids[i, other_agent_id] == observer_id
+            )
 
-        actor_capable = distances_tech_level[observer_id, actor] < prev_actor_tech_level
+            if other_agent_attacked_observer:
+                # check if the other agent was actually capable of attacking
+                prev_other_agent_tech_level = prev_tech_levels[i, other_agent_id]
 
-        observer_targeted[i] = observer_targeted[i] & actor_capable
+                other_agent_capable = (
+                    distances_tech_level[other_agent_id, observer_id]
+                    < prev_other_agent_tech_level
+                )
 
-    # observation should agree with previous action about being targeted
-    probabilities *= observer_targeted == obs_agent_targeted
+                if other_agent_capable:
+                    # agent was capable, let's check what the result is
+                    attack_on_agent_successful = states[i, observer_id, 1] == 0
 
-    # observation should agree with the state about the outcome of the attack
-    obs_attack_successful = observation[-1]
-    for i in range(n_states):
-        if not observer_targeted[i]:
-            continue
+                    if attack_on_agent_successful:
+                        # if we have a successful attack, no need to check other agents.
+                        # note that it might not have been other_agent who destroyed
+                        # the observer
+                        break
 
-        attack_successful = states[i, observer_id, 0] == 0
-        probabilities[i] *= attack_successful == obs_attack_successful
+        probabilities[i] = (
+            attack_on_observer_successful == obs_attack_on_observer_successful
+        )
 
     ### 2. Calculate the probability from the technosignatures
 
     observation = observation[:n_agents]
-    # # determine which agents we should have observed in the current state
-    # # array of shape (n_states, n_agents)
-    observed_agents = np.zeros(shape=(n_states, n_agents), dtype=np.bool_)
-    for i in range(n_states):
-        observer_tech_level = tech_levels[i, observer_id]
-
-        # array of length n_agents
-        distances = distances_tech_level[observer_id, :]
-
-        observed_agents[i] = distances < observer_tech_level
 
     # find expected observations from all agents
     # - technosignature from neighbours
     # - from non-neighbours, we “expect” the observation we actually received
     # - technology level from self
     # this is an array of shape (n_states, n_agents)
-    expected_observation = tech_levels * states[:, :, 1]
-    expected_observation = np.where(observed_agents, expected_observation, observation)
+    expected_observation = tech_levels * states[:, :, 2]
+
+    for i in range(n_states):
+        observer_tech_level = tech_levels[i, observer_id]
+
+        # array of length n_agents
+        non_observed_agents = distances_tech_level[observer_id, :] > observer_tech_level
+
+        # we 'expect' the received observation from the agents we think we cannot observe,
+        # since this observation is then just random noise
+        expected_observation[i, non_observed_agents] = observation[non_observed_agents]
+
+    # from the observer we expect to observe their tech level
     expected_observation[:, observer_id] = tech_levels[:, observer_id]
 
     # find individual densities of observations
-    # TODO: optimise
     densities = _norm_pdf(x=observation, mean=expected_observation, sd=obs_noise_sd)
-    # densities[:, observer_id] = _norm_pdf(
-    #     x=observation[observer_id],
-    #     mean=expected_observation[:, observer_id],
-    #     sd=obs_self_noise_sd,
-    # )
+    densities[:, observer_id] = _norm_pdf(
+        x=observation[observer_id],
+        mean=expected_observation[:, observer_id],
+        sd=obs_self_noise_sd,
+    )
 
     # multiply to get final probabilities
     # probabilities *= densities.prod(axis=1)
@@ -383,9 +373,9 @@ def sample_observation(
         )
 
         if agent_capable:
-            target_destroyed = prev_tech_levels[agent.id] > prev_tech_levels[target.id]
-            if target_destroyed:
-                assert state[target.id, 1] == 0
+            # agent was capable, let's see the result
+            # note that it was not necessarily agent who destroyed the target
+            target_destroyed = state[target.id, 1] == 0
 
     ## 2. Check if agent was destroyed by someone else
     agent_destroyed = np.nan
@@ -407,11 +397,13 @@ def sample_observation(
         )
 
         if other_agent_capable:
-            agent_destroyed = (
-                prev_tech_levels[other_agent.id] > prev_tech_levels[agent.id]
-            )
+            # other agent was capable of attacking agent. Let's check the result.
+            agent_destroyed = state[agent.id, 1] == 0
+
             if agent_destroyed:
-                assert state[agent.id, 1] == 0
+                # if agent is destroyed, we can stop checking other agents.
+                # note that it was not necessarily other_agent who destroyed agent
+                break
 
     ### Determine technosignature observations
 
