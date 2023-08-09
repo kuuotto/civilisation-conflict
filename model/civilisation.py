@@ -100,9 +100,9 @@ class Civilisation(mesa.Agent):
 
         # determine the observation received by agent
         obs = ipomdp.sample_observation(
-            state=self.model.get_state(),
+            state=self.model.state,
             action=self.model.previous_action,
-            agent=self,
+            observer=self,
             model=self.model,
         )
 

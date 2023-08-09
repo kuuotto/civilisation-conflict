@@ -364,7 +364,7 @@ class Universe(mesa.Model):
 
         if self.debug >= 1:
             print(
-                f"t = {self.schedule.time}: actions {action_}, result {tuple(result_description)}"
+                f"t = {self.schedule.time}: actions {action_}, result {tuple(result_description)}, rewards {rewards}"
             )
 
         # store previous action (will be used to generate observations on next time step)

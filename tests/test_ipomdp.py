@@ -417,7 +417,7 @@ class TestObservationSample(unittest.TestCase):
         obs = ipomdp.sample_observation(
             state=propagated_states[0],
             action=prev_actions[0],
-            agent=strong,
+            observer=strong,
             model=mdl,
         )
 
@@ -428,7 +428,7 @@ class TestObservationSample(unittest.TestCase):
         obs = ipomdp.sample_observation(
             state=propagated_states[0],
             action=prev_actions[0],
-            agent=weak,
+            observer=weak,
             model=mdl,
         )
 
@@ -440,7 +440,7 @@ class TestObservationSample(unittest.TestCase):
         obs = ipomdp.sample_observation(
             state=propagated_states[1],
             action=prev_actions[1],
-            agent=strong,
+            observer=strong,
             model=mdl,
         )
 
@@ -451,7 +451,7 @@ class TestObservationSample(unittest.TestCase):
         obs = ipomdp.sample_observation(
             state=propagated_states[1],
             action=prev_actions[1],
-            agent=weak,
+            observer=weak,
             model=mdl,
         )
 
@@ -463,7 +463,7 @@ class TestObservationSample(unittest.TestCase):
         obs = ipomdp.sample_observation(
             state=propagated_states[2],
             action=prev_actions[2],
-            agent=strong,
+            observer=strong,
             model=mdl,
         )
 
@@ -474,7 +474,7 @@ class TestObservationSample(unittest.TestCase):
         obs = ipomdp.sample_observation(
             state=propagated_states[2],
             action=prev_actions[2],
-            agent=weak,
+            observer=weak,
             model=mdl,
         )
 
@@ -486,7 +486,7 @@ class TestObservationSample(unittest.TestCase):
         obs = ipomdp.sample_observation(
             state=propagated_states[3],
             action=prev_actions[3],
-            agent=strong,
+            observer=strong,
             model=mdl,
         )
 
@@ -497,7 +497,7 @@ class TestObservationSample(unittest.TestCase):
         obs = ipomdp.sample_observation(
             state=propagated_states[3],
             action=prev_actions[3],
-            agent=weak,
+            observer=weak,
             model=mdl,
         )
 
@@ -509,7 +509,7 @@ class TestObservationSample(unittest.TestCase):
         obs = ipomdp.sample_observation(
             state=propagated_states[4],
             action=prev_actions[4],
-            agent=strong,
+            observer=strong,
             model=mdl,
         )
 
@@ -520,7 +520,7 @@ class TestObservationSample(unittest.TestCase):
         obs = ipomdp.sample_observation(
             state=propagated_states[4],
             action=prev_actions[4],
-            agent=weak,
+            observer=weak,
             model=mdl,
         )
 
@@ -532,7 +532,7 @@ class TestObservationSample(unittest.TestCase):
         obs = ipomdp.sample_observation(
             state=propagated_states[5],
             action=prev_actions[5],
-            agent=strong,
+            observer=strong,
             model=mdl,
         )
 
@@ -543,7 +543,7 @@ class TestObservationSample(unittest.TestCase):
         obs = ipomdp.sample_observation(
             state=propagated_states[5],
             action=prev_actions[5],
-            agent=weak,
+            observer=weak,
             model=mdl,
         )
 
@@ -562,7 +562,7 @@ class TestObservationSample(unittest.TestCase):
         obs = ipomdp.sample_observation(
             state=propagated_states[6],
             action=prev_actions[6],
-            agent=strong,
+            observer=strong,
             model=mdl,
         )
 
@@ -573,7 +573,7 @@ class TestObservationSample(unittest.TestCase):
         obs = ipomdp.sample_observation(
             state=propagated_states[6],
             action=prev_actions[6],
-            agent=weak,
+            observer=weak,
             model=mdl,
         )
 

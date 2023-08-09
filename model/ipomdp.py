@@ -65,30 +65,31 @@ def transition(
         state = state.copy()
 
     # get the appropriate attack reward
-    attack_reward = (
-        model.rewards["destroyed"] if frame is None else frame["attack_reward"]
-    )
+    attack_reward = model.rewards["attack"] if frame is None else frame["attack_reward"]
 
     # tech levels before the action. This is only calculated if at least one of the
     # agent actions is an attack.
     prev_tech_levels = None
 
-    # keep track of rewards (can also be used to check which agents have been destroyed)
+    # keep track of rewards
     rewards = [0 for agent in model.agents]
+
+    # keep track of who has been destoryed
+    destroyed = [False for agent in model.agents]
 
     # copy over the current ages to the previous ages column
     state[:, 0] = state[:, 1]
 
+    # always tick everyone's time by one
+    state[:, 1] += 1
+
     for agent, agent_action in zip(model.agents, action_, strict=True):
         if agent_action == action.HIDE:
-            # if agent has already been destroyed
-            agent_destroyed = rewards[agent.id] == model.rewards["destroyed"]
-
             # reward for hiding
             rewards[agent.id] += model.rewards["hide"]
 
             # if agent is already destroyed by someone else, hiding doesn't do anything
-            if agent_destroyed:
+            if destroyed[agent.id]:
                 continue
 
             # if actor hides, additionally update their visibility
@@ -113,14 +114,19 @@ def transition(
                 actor_capable
                 and prev_tech_levels[agent.id] > prev_tech_levels[target.id]
             ):
-                # civilisation is destroyed
-                state[target.id, 1] = -1  # reset age
+                # target is destroyed
+                state[target.id, 1] = 0  # reset age
                 state[target.id, 2] = 1  # reset visibility factor
-                rewards[target.id] += model.rewards["destroyed"]
+
+                # add reward for getting destroyed if it has not been added already
+                if not destroyed[target.id]:
+                    rewards[target.id] += model.rewards["destroyed"]
+
+                # attack reward for agent
                 rewards[agent.id] += attack_reward
 
-    # always tick everyone's time by one
-    state[:, 1] += 1
+                # mark target as destroyed
+                destroyed[target.id] = True
 
     return state, rewards
 
@@ -167,7 +173,7 @@ def _prob_observation(
     n_agents: int,
     obs_noise_sd: float,
     obs_self_noise_sd: float,
-) -> float:
+) -> ipomdp_solver.Belief:
     """
     Returns the probability density of a given observation by an observer \
     (represented by its id, "observer_id") given a set of current system states \
@@ -180,6 +186,12 @@ def _prob_observation(
     NOTE: While the code is not vectorised, this does not matter in practice as \
     Numba works pretty much equally well with loops.
 
+    NOTE: In hindsight, this does a bit of extra work by essentially doing a part of
+    the transition function again. For example, when calculating what the correct
+    attack on observer bit for a state is, it would be sufficient to just check if
+    the observer's new age is zero and whether someone attacked it. However, this works
+    so I'm leaving it as is.
+    
     Keyword arguments:
     observation: the observation received, as a NumPy array
     states: the system states to evaluate the density at
@@ -202,7 +214,7 @@ def _prob_observation(
     n_states = len(states)
 
     # initialise result
-    probabilities = np.ones(shape=n_states)
+    probabilities = np.ones(shape=n_states, dtype=np.float_)
 
     ### 1. determine if the success bits in the observation are correct
     ### observer's attack bit
@@ -213,7 +225,8 @@ def _prob_observation(
     # calculates the correct observation bit for each state and compares to the
     # observed one
     for i in range(n_states):
-        attack_successful = np.nan
+        # default value if agent did not attack
+        attack_successful = -1
 
         target_id = attack_target_ids[i, observer_id]
 
@@ -226,12 +239,12 @@ def _prob_observation(
             )
 
             if observer_capable:
-                # observer was capable, let's see what the result is
+                # observer was capable, let's see what the result is.
                 # note that observer was not necessarily the one who destroyed the
                 # target
                 attack_successful = states[i, target_id, 1] == 0
 
-        probabilities[i] = attack_successful == obs_attack_successful
+        probabilities[i] *= attack_successful == obs_attack_successful
 
     ### observer targeted bit
 
@@ -239,8 +252,10 @@ def _prob_observation(
 
     # calculates the correct bit for each state and compares to the observed one
     for i in range(n_states):
-        attack_on_observer_successful = np.nan
+        # default value if the observer was not attacked
+        attack_on_observer_successful = -1
 
+        # check everyone else's actions
         for other_agent_id in range(n_agents):
             if other_agent_id == observer_id:
                 continue
@@ -260,15 +275,15 @@ def _prob_observation(
 
                 if other_agent_capable:
                     # agent was capable, let's check what the result is
-                    attack_on_agent_successful = states[i, observer_id, 1] == 0
+                    attack_on_observer_successful = states[i, observer_id, 1] == 0
 
-                    if attack_on_agent_successful:
+                    if attack_on_observer_successful:
                         # if we have a successful attack, no need to check other agents.
                         # note that it might not have been other_agent who destroyed
                         # the observer
                         break
 
-        probabilities[i] = (
+        probabilities[i] *= (
             attack_on_observer_successful == obs_attack_on_observer_successful
         )
 
@@ -286,7 +301,7 @@ def _prob_observation(
     for i in range(n_states):
         observer_tech_level = tech_levels[i, observer_id]
 
-        # array of length n_agents
+        # (array of length n_agents)
         non_observed_agents = distances_tech_level[observer_id, :] > observer_tech_level
 
         # we 'expect' the received observation from the agents we think we cannot observe,
@@ -315,7 +330,7 @@ def _prob_observation(
 def sample_observation(
     state: ipomdp_solver.State,
     action: ipomdp_solver.Action,
-    agent: civilisation.Civilisation,
+    observer: civilisation.Civilisation,
     model: universe.Universe,
 ) -> ipomdp_solver.Observation:
     """
@@ -344,23 +359,23 @@ def sample_observation(
     The observation. An array of length n_agents + 2. 
     The n_agents values correspond to technosignatures of civilisations and the
     final two bits are success bits as described above.
-    The first success bit is np.nan if the agent did not attack.
-    The second success bit is np.nan if the agent was not attacked.
+    The first success bit is -1 if the agent did not attack.
+    The second success bit is -1 if the agent was not attacked.
     """
-    agent_action = action[agent.id]
+    observer_action = action[observer.id]
 
     # technology levels at the previous time step are only computed when they are
     # first needed
     prev_tech_levels = None
 
     ### determine success bits
-    ## 1. Check if agent successfully attacked someone
-    agent_attacked = isinstance(agent_action, civilisation.Civilisation)
-    target_destroyed = np.nan
+    ## 1. Check if observer successfully attacked someone
+    observer_attacked = isinstance(observer_action, civilisation.Civilisation)
+    target_destroyed = -1
 
-    # check if agent was actually capable of attacking last round
-    if agent_attacked:
-        target = agent_action
+    # check if observer was actually capable of attacking last round
+    if observer_attacked:
+        target = observer_action
 
         # calculate previous tech levels if necessary
         if prev_tech_levels is None:
@@ -368,19 +383,19 @@ def sample_observation(
                 state=state, model=model, previous=True
             )
 
-        agent_capable = model.is_neighbour(
-            agent1=agent, agent2=target, tech_level=prev_tech_levels[agent.id]
+        observer_capable = model.is_neighbour(
+            agent1=observer, agent2=target, tech_level=prev_tech_levels[observer.id]
         )
 
-        if agent_capable:
-            # agent was capable, let's see the result
-            # note that it was not necessarily agent who destroyed the target
+        if observer_capable:
+            # observer was capable, let's see the result
+            # note that it was not necessarily observer who destroyed the target
             target_destroyed = state[target.id, 1] == 0
 
-    ## 2. Check if agent was destroyed by someone else
-    agent_destroyed = np.nan
+    ## 2. Check if observer was destroyed by someone else
+    observer_destroyed = -1
     for other_agent, other_agent_action in zip(model.agents, action, strict=True):
-        if other_agent_action != agent:
+        if other_agent_action != observer:
             continue
 
         # calculate previous tech levels if necessary
@@ -392,15 +407,15 @@ def sample_observation(
         # other_agent tried to attack agent. Let's check the result
         other_agent_capable = model.is_neighbour(
             agent1=other_agent,
-            agent2=agent,
+            agent2=observer,
             tech_level=prev_tech_levels[other_agent.id],
         )
 
         if other_agent_capable:
             # other agent was capable of attacking agent. Let's check the result.
-            agent_destroyed = state[agent.id, 1] == 0
+            observer_destroyed = state[observer.id, 1] == 0
 
-            if agent_destroyed:
+            if observer_destroyed:
                 # if agent is destroyed, we can stop checking other agents.
                 # note that it was not necessarily other_agent who destroyed agent
                 break
@@ -412,7 +427,7 @@ def sample_observation(
 
     # store result bits
     observation[-2] = target_destroyed
-    observation[-1] = agent_destroyed
+    observation[-1] = observer_destroyed
 
     # calculate current tech levels
     tech_levels = growth.tech_level(state=state, model=model)
@@ -426,14 +441,16 @@ def sample_observation(
     )
 
     # find neighbours
-    nbrs = model.get_agent_neighbours(agent=agent, tech_level=tech_levels[agent.id])
+    nbrs = model.get_agent_neighbours(
+        agent=observer, tech_level=tech_levels[observer.id]
+    )
 
     # add neighbours' noisy technosignatures to observation
     for nbr in nbrs:
         observation[nbr.id] = technosignatures[nbr.id]
 
     # add agent's own technology level with noise
-    observation[agent.id] = tech_levels[agent.id] + model.random.gauss(
+    observation[observer.id] = tech_levels[observer.id] + model.random.gauss(
         mu=0, sigma=model.obs_self_noise_sd
     )
 
@@ -466,12 +483,15 @@ def uniform_initial_belief(
     size = (n_samples, n_agents)
 
     # initial age distribution
-    sample[..., 0] = model.rng.integers(
+    sample[..., 1] = model.rng.integers(
         *model.init_age_belief_range, size=size, endpoint=True
     )
 
+    # previous ages
+    sample[..., 0] = sample[..., 1] - 1
+
     # initial visibility distribution
-    sample[..., 1] = model.rng.uniform(*model.init_visibility_belief_range, size=size)
+    sample[..., 2] = model.rng.uniform(*model.init_visibility_belief_range, size=size)
 
     # determine the values or range of the growth parameters
     if model.agent_growth == growth.sigmoid_growth:
@@ -499,14 +519,14 @@ def uniform_initial_belief(
             raise Exception("Sigmoid growth parameters are incorrect")
 
         # sample from the ranges
-        sample[..., 2] = model.rng.uniform(*speed_range, size=size)
-        sample[..., 3] = model.rng.integers(
+        sample[..., 3] = model.rng.uniform(*speed_range, size=size)
+        sample[..., 4] = model.rng.integers(
             *takeoff_time_range, size=size, endpoint=True
         )
 
     # if provided, agent is certain about its own state in all samples
     if agent is not None:
-        sample[:, agent.id, :] = agent.get_state()
+        sample[:, agent.id, :] = agent.state
 
     return sample
 
@@ -580,20 +600,23 @@ def surpass_scenario_initial_belief(
         ### generate a random sample
 
         # age
-        samples[n_generated, :, 0] = model.rng.integers(
+        samples[n_generated, :, 1] = model.rng.integers(
             *model.init_age_belief_range, size=n_agents, endpoint=True
         )
 
+        # previous age
+        samples[n_generated, :, 0] = samples[n_generated, :, 1] - 1
+
         # visibility factor
-        samples[n_generated, :, 1] = model.rng.uniform(
+        samples[n_generated, :, 2] = model.rng.uniform(
             *model.init_visibility_belief_range, size=n_agents
         )
 
         # growth speed
-        samples[n_generated, :, 2] = model.rng.uniform(*speed_range, size=n_agents)
+        samples[n_generated, :, 3] = model.rng.uniform(*speed_range, size=n_agents)
 
         # growth takeoff age
-        samples[n_generated, :, 3] = model.rng.integers(
+        samples[n_generated, :, 4] = model.rng.integers(
             *takeoff_time_range, size=n_agents, endpoint=True
         )
 
@@ -616,7 +639,7 @@ def surpass_scenario_initial_belief(
             continue
 
         # 3. 1 will surpass 0
-        samples[n_generated, :, 0] += time_until_surpass
+        samples[n_generated, :, 1] += time_until_surpass
         future_tech_levels = growth.tech_level(samples[n_generated], model=model)
 
         if generate_surpass and future_tech_levels[1] < future_tech_levels[0]:
@@ -625,7 +648,7 @@ def surpass_scenario_initial_belief(
             continue
 
         # we accept the new sample. We also decide which kind of sample to generate next
-        samples[n_generated, :, 0] -= time_until_surpass
+        samples[n_generated, :, 1] -= time_until_surpass
         generate_surpass = model.random.random() < prob_surpass
         n_generated += 1
 

@@ -3,7 +3,7 @@
 # avoids having to give type annotations as strings
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Tuple, List, Union, Dict, Generator, Any
+from typing import TYPE_CHECKING, Tuple, List, Union, Dict, Generator, Any, Set
 from numpy.typing import NDArray
 from model import ipomdp, growth, action
 import numpy as np
@@ -23,7 +23,10 @@ if TYPE_CHECKING:
     Belief = NDArray
     Frame = Dict[str, Any]
 
+# parameters which can be adjusted to change momory consumption
 WEIGHT_STORAGE_DTYPE = np.float32
+NODE_ARRAY_INIT_SIZE = 5
+NODE_ARRAY_INCREASE_SIZE = 50
 
 
 def joint_to_agent_action_history(
@@ -37,9 +40,7 @@ def joint_to_agent_action_history(
     joint_history: joint action history
     agent: agent whose action history to determine
     """
-    return tuple(
-        act[1] if agent == act[0] else action.NO_TURN for act in joint_action_history
-    )
+    return tuple(joint_action[agent.id] for joint_action in joint_action_history)
 
 
 @njit
@@ -640,15 +641,14 @@ class Tree:
     ) -> float:
         """
         Simulate decision-making from the current particle at node by
-        1. choosing who gets to act
-        2. choosing the actor's action
-        3. propagating the particle with this action using the transition \
+        1. choosing an action from each agent
+        2. propagating the particle with this action using the transition \
            function of the I-POMDP
-        4. generating an observation for the tree agent and creating a new belief in \
+        3. generating an observation for the tree agent and creating a new belief in \
            the next node
-        5. generating an observation for each other agent and updating the beliefs in \
+        4. generating an observation for each other agent and updating the beliefs in \
            the trees on the level below
-        6. repeat
+        5. repeat
 
         Keyword arguments:
         particle: particle to start simulating from
@@ -695,54 +695,55 @@ class Tree:
             # end recursion
             return value
 
-        ### 1. choose actor
-        actor: civilisation.Civilisation = model.random.choice(model.agents)
-
-        ### 2. choose an action
+        ### 1. choose an action from each agent
         action_unvisited = False
+        action_ = []
 
-        if actor == self.agent:
-            # use tree policy to choose action
-            actor_action, action_unvisited = self.tree_policy(node=node, explore=True)
+        for actor in model.agents:
+            if actor == self.agent:
+                # use tree policy to choose action
+                actor_action, action_unvisited = self.tree_policy(
+                    node=node, explore=True
+                )
 
-        elif self.level == 0:
-            # use the default policy to choose the action of others
-            actor_action = ipomdp.level0_opponent_policy(agent=actor, model=model)
-
-        else:
-            ### use the tree below to choose the action
-
-            # find matching node
-            lower_node = other_agent_nodes[actor]
-
-            # if node is not found, choose with default policy
-            if lower_node is None:
-                model.add_log_event(event_type=11, event_data=(self.signature,))
+            elif self.level == 0:
+                # use the default policy to choose the action of others
                 actor_action = ipomdp.level0_opponent_policy(agent=actor, model=model)
 
             else:
-                # determine action from the other agent's tree
-                actor_action, _ = lower_node.tree.tree_policy(
-                    node=lower_node, explore=False, softargmax=True, simulated_tree=self
-                )
+                ### use the tree below to choose the action
+
+                # find matching node
+                lower_node = other_agent_nodes[actor]
+
+                # if node is not found, choose with default policy
+                if lower_node is None:
+                    model.add_log_event(event_type=11, event_data=(self.signature,))
+                    actor_action = ipomdp.level0_opponent_policy(
+                        agent=actor, model=model
+                    )
+
+                else:
+                    # determine action from the other agent's tree
+                    actor_action, _ = lower_node.tree.tree_policy(
+                        node=lower_node,
+                        explore=False,
+                        softargmax=True,
+                        simulated_tree=self,
+                    )
+
+            # add to joint action
+            action_.append(actor_action)
 
         # package action
-        action_ = (actor, actor_action)
-        agent_action = actor_action if self.agent == actor else action.NO_TURN
+        action_ = tuple(action_)
+        agent_action = action_[self.agent.id]
 
-        # calculate value of taking action
-        agent_action_value = ipomdp.reward(
-            state=particle.state,
-            action_=action_,
-            agent=self.agent,
-            model=model,
-            attack_reward=node.frame["attack_reward"],
+        ### 2. Propagate state
+        propagated_state, rewards = ipomdp.transition(
+            state=particle.state, action_=action_, model=model, frame=node.frame
         )
-
-        ### 3. Propagate state
-        propagated_state = ipomdp.transition(
-            state=particle.state, action_=action_, model=model
-        )
+        agent_reward = rewards[self.agent.id]
 
         # create a new node if necessary
         if agent_action not in node.child_nodes:
@@ -772,7 +773,7 @@ class Tree:
             assert particle.node in self.root_nodes
             next_particle.add_noise()
 
-        ### 4. Update the belief in the current tree
+        ### 3. Update the belief in the current tree
         # if the action is unvisited, creating weights is not necessary as we perform
         # a rollout from it on the next recursion
         if not action_unvisited:
@@ -783,14 +784,14 @@ class Tree:
             agent_obs = ipomdp.sample_observation(
                 state=propagated_state,
                 action=action_,
-                agent=self.agent,
+                observer=self.agent,
                 model=model,
             )
 
             # weight particles in the next node
             next_node.weight_particles(agent_obs)
 
-        ### 5. Generate observations for other agents and update beliefs about
+        ### 4. Generate observations for other agents and update beliefs about
         ### interactive states at the level below
         next_other_agent_nodes = None
 
@@ -799,9 +800,7 @@ class Tree:
             next_other_agent_nodes = {
                 other_agent: None
                 if other_agent_node is None
-                else other_agent_node.child_nodes.get(
-                    actor_action if actor == other_agent else action.NO_TURN
-                )
+                else other_agent_node.child_nodes.get(action_[other_agent.id])
                 for other_agent, other_agent_node in other_agent_nodes.items()
             }
 
@@ -835,7 +834,7 @@ class Tree:
                 other_agent_obs = ipomdp.sample_observation(
                     state=propagated_state,
                     action=action_,
-                    agent=other_agent,
+                    observer=other_agent,
                     model=model,
                 )
 
@@ -856,13 +855,14 @@ class Tree:
             depth=depth + 1,
         )
 
+        ### Simulation is done
         # add particle to node
         # (except if this is the particle where we started simulating)
         if depth > 0:
             node.add_particle(particle)
 
         # save value and next agent action to particle
-        value = agent_action_value + model.discount_factor * future_value
+        value = agent_reward + model.discount_factor * future_value
         particle.add_expansion(action=action_, value=value, next_particle=next_particle)
 
         # clean up beliefs to save memory
@@ -1082,8 +1082,7 @@ class Node:
         self.belief_observation = None
 
         self.n_particles = 0
-        self.array_increase_size = 50  # how much to increase arrays when they fill up
-        self.array_size = 5  # initial size of arrays
+        self.array_size = NODE_ARRAY_INIT_SIZE  # current size of arrays
         self.n_actions = len(tree.agent.possible_actions())
         model: universe.Universe = tree.forest.owner.model
 
@@ -1100,13 +1099,9 @@ class Node:
         )
         # - value estimates of each action
         self._act_value = np.zeros(shape=(self.array_size, self.n_actions))
-        # - ids of actors in the previous action
-        self._prev_action_actor_ids = np.full(
-            shape=(self.array_size,), fill_value=-1, dtype=np.int8
-        )
         # - ids of targets of attacks in the previous action
-        self._prev_action_target_ids = np.full(
-            shape=(self.array_size,), fill_value=-1, dtype=np.int8
+        self._prev_action_attack_target_ids = np.full(
+            shape=(self.array_size, model.n_agents), fill_value=-1, dtype=np.int8
         )
         # - ids of previous particles
         self._prev_particle_ids = np.full(
@@ -1148,12 +1143,8 @@ class Node:
         return self._act_value[: self.n_particles]
 
     @property
-    def prev_action_actor_ids(self) -> NDArray:
-        return self._prev_action_actor_ids[: self.n_particles]
-
-    @property
-    def prev_action_target_ids(self) -> NDArray:
-        return self._prev_action_target_ids[: self.n_particles]
+    def prev_action_attack_target_ids(self) -> NDArray:
+        return self._prev_action_attack_target_ids[: self.n_particles]
 
     @property
     def prev_particle_ids(self) -> NDArray:
@@ -1168,6 +1159,7 @@ class Node:
         Add particle to node
         """
         assert particle.node == self
+        n_agents = self.tree.forest.owner.model.n_agents
 
         # give particle its index in the arrays
         particle.id = self.n_particles
@@ -1180,13 +1172,13 @@ class Node:
         if self.n_particles > self.array_size:
             # states
             new_states = np.zeros(
-                shape=(self.array_increase_size, *self._states.shape[1:])
+                shape=(NODE_ARRAY_INCREASE_SIZE, *self._states.shape[1:])
             )
             self._states = np.concatenate((self._states, new_states), axis=0)
 
             # n_expansions
             new_n_expansions = np.zeros(
-                shape=(self.array_increase_size,), dtype=np.uint16
+                shape=(NODE_ARRAY_INCREASE_SIZE,), dtype=self.n_expansions.dtype
             )
             self._n_expansions = np.concatenate(
                 (self._n_expansions, new_n_expansions), axis=0
@@ -1194,43 +1186,43 @@ class Node:
 
             # n_expansions_act
             new_n_expansions_act = np.zeros(
-                shape=(self.array_increase_size, self.n_actions),
-                dtype=np.uint16,
+                shape=(NODE_ARRAY_INCREASE_SIZE, self.n_actions),
+                dtype=self._n_expansions_act.dtype,
             )
             self._n_expansions_act = np.concatenate(
                 (self._n_expansions_act, new_n_expansions_act), axis=0
             )
 
             # act_value
-            new_act_value = np.zeros(shape=(self.array_increase_size, self.n_actions))
+            new_act_value = np.zeros(shape=(NODE_ARRAY_INCREASE_SIZE, self.n_actions))
             self._act_value = np.concatenate((self._act_value, new_act_value), axis=0)
 
-            # prev_action_actor_ids
-            new_prev_action_actor_ids = np.full(
-                shape=(self.array_increase_size,), fill_value=-1, dtype=np.int8
+            # prev_action_attack_target_ids
+            new_prev_action_attack_target_ids = np.full(
+                shape=(NODE_ARRAY_INCREASE_SIZE, n_agents),
+                fill_value=-1,
+                dtype=self._prev_action_attack_target_ids.dtype,
             )
-            self._prev_action_actor_ids = np.concatenate(
-                (self._prev_action_actor_ids, new_prev_action_actor_ids), axis=0
-            )
-
-            # prev_action_target_ids
-            new_prev_action_target_ids = np.full(
-                shape=(self.array_increase_size,), fill_value=-1, dtype=np.int8
-            )
-            self._prev_action_target_ids = np.concatenate(
-                (self._prev_action_target_ids, new_prev_action_target_ids), axis=0
+            self._prev_action_attack_target_ids = np.concatenate(
+                (
+                    self._prev_action_attack_target_ids,
+                    new_prev_action_attack_target_ids,
+                ),
+                axis=0,
             )
 
             # prev_particle_ids
             new_prev_particle_ids = np.full(
-                shape=(self.array_increase_size,), fill_value=-1, dtype=np.int32
+                shape=(NODE_ARRAY_INCREASE_SIZE,),
+                fill_value=-1,
+                dtype=self._prev_particle_ids.dtype,
             )
             self._prev_particle_ids = np.concatenate(
                 (self._prev_particle_ids, new_prev_particle_ids), axis=0
             )
 
             # increase size of array size variable to match the new array lengths
-            self.array_size += self.array_increase_size
+            self.array_size += NODE_ARRAY_INCREASE_SIZE
 
         ### store state
         self._states[particle.id] = particle._state
@@ -1246,12 +1238,12 @@ class Node:
             return
 
         # store information about the previous action
-        actor, actor_action = particle.joint_action_history[-1]
-        self._prev_action_actor_ids[particle.id] = actor.id
-
-        # if action is an attack, store the id of the target
-        if not isinstance(actor_action, int):
-            self._prev_action_target_ids[particle.id] = actor_action.id
+        for actor_id, actor_action in enumerate(particle.joint_action_history[-1]):
+            # if action is an attack, store the id of the target
+            if not isinstance(actor_action, int):
+                self._prev_action_attack_target_ids[
+                    particle.id, actor_id
+                ] = actor_action.id
 
     def create_initial_particles(self) -> None:
         """
@@ -1335,12 +1327,12 @@ class Node:
                 for other_agent in (ag for ag in model.agents if ag != self.tree.agent):
                     # create uniform weights
                     particle_weights = np.array(n_particles * (1 / n_particles,))
+
+                    # store created belief in sparse format
                     weights_mask = particle_weights > 0
                     weights_values = particle_weights[weights_mask].astype(
                         WEIGHT_STORAGE_DTYPE
                     )
-
-                    # store created belief
                     particle.lower_particle_dist[other_agent.id] = (
                         weights_mask,
                         weights_values,
@@ -1385,8 +1377,7 @@ class Node:
         weights = ipomdp.prob_observation(
             observation=observation,
             states=self.states,
-            prev_action_actor_ids=self.prev_action_actor_ids,
-            prev_action_target_ids=self.prev_action_target_ids,
+            attack_target_ids=self.prev_action_attack_target_ids,
             observer=self.tree.agent,
             model=model,
         )
@@ -1517,7 +1508,7 @@ class Node:
                 other_agent_obs = ipomdp.sample_observation(
                     state=particle.state,
                     action=particle.joint_action_history[-1],
-                    agent=other_agent,
+                    observer=other_agent,
                     model=model,
                 )
 
@@ -1600,7 +1591,7 @@ class Particle:
 
         # this keeps track of others' actions that have been used to propagate
         # this particle
-        self.propagated_actions: List[Action] = []
+        self.propagated_actions: Set[Action] = set()
 
     def update_previous_particle_id(self, new_id) -> None:
         self.node._prev_particle_ids[self.id] = new_id
@@ -1650,15 +1641,7 @@ class Particle:
         """
         Checks whether this particle has been propagated with the given action before.
         """
-        # if action is someone else's, check propagated_actions
-        agent = self.node.tree.agent
-        actor = action[0]
-        if agent != actor:
-            return action in self.propagated_actions
-
-        # otherwise check number of times self has been expanded with agent action
-        agent_action = action[1]
-        return self.n_expansions_act(agent_action) > 0
+        return action in self.propagated_actions
 
     def add_expansion(
         self, action: Action, value: float, next_particle: Particle
@@ -1681,17 +1664,14 @@ class Particle:
         if next_particle.added_to_node:
             next_particle.update_previous_particle_id(self.id)
 
-        # if someone else acted, we only store the action
-        actor = action[0]
-        if agent != actor:
-            if not self.has_been_propagated_with(action):
-                self.propagated_actions.append(action)
-            return
+        # store the action (used to check if noise needs to be added)
+        self.propagated_actions.add(action)
 
         # find index of action
-        agent_action = action[1]
+        agent_action = action[agent.id]
         action_index = agent.possible_actions().index(agent_action)
 
+        # current information for agent_action
         prev_n_expansions = self.n_expansions_act(agent_action)
         prev_value = self.act_value(agent_action)
 
@@ -1721,7 +1701,7 @@ class Particle:
 
             if speed_range[0] < speed_range[1] and speed_noise_scale > 0:
                 if speed_noise_dist == "normal":
-                    state[:, 2] += model.rng.normal(
+                    state[:, 3] += model.rng.normal(
                         loc=0, scale=speed_noise_scale, size=model.n_agents
                     )
                 else:
@@ -1730,13 +1710,13 @@ class Particle:
                     )
 
                 # make sure values stay within allowed range
-                state[:, 2] = state[:, 2].clip(*speed_range)
+                state[:, 3] = state[:, 3].clip(*speed_range)
 
             if (
                 takeoff_time_range[0] < takeoff_time_range[1]
                 and takeoff_time_noise_scale > 0
             ):
-                state[:, 3] += model.rng.integers(
+                state[:, 4] += model.rng.integers(
                     low=-takeoff_time_noise_scale,
                     high=takeoff_time_noise_scale,
                     endpoint=True,
@@ -1744,7 +1724,7 @@ class Particle:
                 )
 
                 # make sure values stay within allowed range
-                state[:, 3] = state[:, 3].clip(*takeoff_time_range)
+                state[:, 4] = state[:, 4].clip(*takeoff_time_range)
         else:
             raise NotImplementedError()
 
