@@ -268,7 +268,8 @@ class Universe(mesa.Model):
         # determine action
         action_ = tuple(agent.choose_action() for agent in self.agents)
 
-        print(self.state)
+        if self.debug >= 1:
+            print(self.state)
 
         # determine result of action
         new_state, rewards = ipomdp.transition(self.state, action_=action_, model=self)
