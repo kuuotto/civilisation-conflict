@@ -695,11 +695,24 @@ class Tree:
             # end recursion
             return value
 
-        ### 1. choose an action from each agent
+        ### 1. choose an action from each agent according to the activation schedule
         action_unvisited = False
         action_ = []
 
+        # determine actor(s) according to the activation schedule
+        if model.activation_schedule == "joint":
+            actors = model.agents
+        elif model.activation_schedule == "random":
+            actors = (model.random.choice(model.agents),)
+        else:
+            raise NotImplementedError
+
         for actor in model.agents:
+            # if the agent does not get to act, choose a "no turn" action for it
+            if actor not in actors:
+                action_.append(action.NO_TURN)
+                continue
+
             if actor == self.agent:
                 # use tree policy to choose action
                 actor_action, action_unvisited = self.tree_policy(
@@ -863,7 +876,9 @@ class Tree:
 
         # save value and next agent action to particle
         value = agent_reward + model.discount_factor * future_value
-        particle.add_expansion(action=action_, value=value, next_particle=next_particle)
+        particle.add_expansion(
+            action_=action_, value=value, next_particle=next_particle
+        )
 
         # clean up beliefs to save memory
         if node != self.forest.top_level_tree_root_node:
@@ -1644,7 +1659,7 @@ class Particle:
         return action in self.propagated_actions
 
     def add_expansion(
-        self, action: Action, value: float, next_particle: Particle
+        self, action_: Action, value: float, next_particle: Particle
     ) -> None:
         """
         Add information about an expansion performed starting from the particle.
@@ -1652,7 +1667,7 @@ class Particle:
         Particle should be added to the node before this can be called.
 
         Keyword arguments:
-        action: action used to propagate the particle
+        action_: action used to propagate the particle
         value: value received for taking this action and continuing optimally afterwards
         next_particle: the particle that resulted from taking action from self
         """
@@ -1665,10 +1680,14 @@ class Particle:
             next_particle.update_previous_particle_id(self.id)
 
         # store the action (used to check if noise needs to be added)
-        self.propagated_actions.add(action)
+        self.propagated_actions.add(action_)
+
+        # if agent didn't act, there's no further information to store
+        if action_[agent.id] == action.NO_TURN:
+            return
 
         # find index of action
-        agent_action = action[agent.id]
+        agent_action = action_[agent.id]
         action_index = agent.possible_actions().index(agent_action)
 
         # current information for agent_action
