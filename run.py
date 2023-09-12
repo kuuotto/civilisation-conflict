@@ -20,7 +20,7 @@ params = {
     "rewards": {"destroyed": -1, "hide": -0.01, "attack": 0},
     "prob_indifferent": 0,
     "n_root_belief_samples": 1000,
-    "n_tree_simulations": 10000,
+    "n_tree_simulations": 1000,
     "obs_noise_sd": 0.15,
     "obs_self_noise_sd": 0.15,
     "reasoning_level": 1,
@@ -33,14 +33,15 @@ params = {
     },
     "discount_factor": 0.6,
     "discount_epsilon": 0.10,
-    "exploration_coef": 0.3,
-    "softargmax_coef": 0.01,
+    "exploration_coef": 0.6,
+    "softargmax_coef": 0.1,
     "visibility_multiplier": 0.5,
     "decision_making": "ipomdp",
     "init_age_belief_range": (0, 50),
     "init_age_range": (0, 50),
     "init_visibility_belief_range": (1, 1),
     "init_visibility_range": (1, 1),
+    "activation_schedule": "joint",  # can be "random" or "joint"
 }
 n_steps = 100
 

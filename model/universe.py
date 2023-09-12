@@ -31,6 +31,7 @@ class Universe(mesa.Model):
         init_age_range,
         init_visibility_belief_range,
         init_visibility_range,
+        activation_schedule,
         toroidal_space=False,
         debug=False,
         log_events=True,
@@ -95,6 +96,9 @@ class Universe(mesa.Model):
         init_visibility_range: the range in which the visibility factors of \
                                agents are initialy uniformly distributed. \
                                Typically (1, 1)
+        activation_schedule: defines the schedule with which agents get to make
+                             decisions. Supports "joint" (all agents act each turn)
+                             and "random" (a randomly chosen agent acts).
         toroidal_space: whether to use a toroidal universe topology
         debug: whether to print detailed debug information while model is run
         log_events: whether to keep a log of model events
@@ -126,6 +130,7 @@ class Universe(mesa.Model):
         self.init_age_range = init_age_range
         self.init_visibility_belief_range = init_visibility_belief_range
         self.init_visibility_range = init_visibility_range
+        self.activation_schedule = activation_schedule
         self.debug = debug
         self.log_events = log_events
         self.ignore_exceptions = ignore_exceptions
@@ -262,11 +267,19 @@ class Universe(mesa.Model):
 
     def step_act(self):
         """
-        Activated once every time step. Asks each agent for an action and progresses
-        the model state.
+        Activated once every time step. Asks each agent (joint activation schedule)
+        or a randomly chosen agent (random activation schedule) for an action and
+        progresses the model state.
         """
         # determine action
-        action_ = tuple(agent.choose_action() for agent in self.agents)
+        if self.activation_schedule == "joint":
+            action_ = tuple(agent.choose_action() for agent in self.agents)
+        elif self.activation_schedule == "random":
+            actor = self.random.choice(self.agents)
+            action_ = tuple(
+                agent.choose_action() if agent == actor else action.NO_TURN
+                for agent in self.agents
+            )
 
         if self.debug >= 1:
             print(self.state)
@@ -327,7 +340,7 @@ class Universe(mesa.Model):
                     ignore_missing=True,
                 )
 
-            else:
+            elif isinstance(agent_action, civilisation.Civilisation):
                 # agent attacked
                 target = agent_action
 
