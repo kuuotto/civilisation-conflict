@@ -1,7 +1,7 @@
 from typing import Tuple, List, TypeAlias
 from enum import Enum
 from envs.runner_chaser import grid
-from envs.posg import POSG
+from envs.ipomdp import IPOMDP
 
 
 # define the ids of the two agents
@@ -47,7 +47,7 @@ WIN_REWARD = 100
 LOSS_REWARD = -100
 
 
-class RCPOSG(POSG):
+class RCPOSG(IPOMDP[Agent, State, Action, Observation]):
     """A Partially Observable Stochastic Game for the Runner-Chaser problem"""
 
     def __init__(self, map_name: str) -> None:

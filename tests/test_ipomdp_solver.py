@@ -492,14 +492,14 @@ class TestTreeExpansion(unittest.TestCase):
         Checks that the given node looks like it should (see comments for more
         information on what this means).
         """
-        mdl = node.tree.forest.owner.model
-        agent = node.tree.agent
+        mdl = node.forest.solver.owner.model
+        agent = node.forest.agent
 
         n_particles = len(node.particles)
         is_root_node = node.parent_node is None
 
         # if node is a root node, check that its particles have stored weights
-        if node.tree.level > 0 and is_root_node:
+        if node.forest.level > 0 and is_root_node:
             other_agents = tuple(a for a in mdl.agents if a != agent)
 
             for particle in node.particles:
@@ -514,7 +514,7 @@ class TestTreeExpansion(unittest.TestCase):
                     self.assertIsInstance(weights, np.ndarray)
 
                     # find matching node
-                    lower_node = node.tree.forest.get_matching_lower_node(
+                    lower_node = node.forest.solver.get_matching_lower_node(
                         particle=particle, agent=other_agent
                     )
 
