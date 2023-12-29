@@ -1,25 +1,31 @@
-from abc import ABC, abstractmethod
-from typing import (
-    TypeVar,
-    Generic,
-    Mapping,
-    TypeAlias,
-    Callable,
-    Optional,
-    Sequence,
-    Iterator,
-)
-from enum import Enum
+# avoids having to give type annotations as strings
+from __future__ import annotations
 
-# type annotations
-Agent = TypeVar("Agent")
-State = TypeVar("State")
-Action = TypeVar("Action")
+from abc import ABC, abstractmethod
+from enum import Enum
+from random import Random
+from typing import (
+    Iterator,
+    Mapping,
+    Sequence,
+    TypeAlias,
+)
+
+import numpy as np
+from numpy.typing import NDArray
+
+# agents should be represented by integers 0, 1, ...
+Agent: TypeAlias = int
+
+# states, actions and observations are arrays
+State: TypeAlias = NDArray
+Action: TypeAlias = NDArray
+Observation: TypeAlias = NDArray
+
 JointAction = Mapping[Agent, Action]
-Observation = TypeVar("Observation")
 Reward: TypeAlias = float
 # using Dict instead of Mapping because this is only used as a return type
-JointReward = dict[Agent, Reward]
+JointReward: TypeAlias = dict[Agent, Reward]
 
 
 class ActivationSchedule(Enum):
@@ -27,50 +33,14 @@ class ActivationSchedule(Enum):
     RandomActivation = 1  # a randomly chosen agent acts each turn
 
 
-# class Frame:
-#     """
-#     Encapsulates important information related to decision-making. Specifically,
-#     contains the transition/reward function and the observation sampling and
-#     probability functions. A frame is always related to a specific agent.
-
-#     Note that the frame implicitly defines the space of joint actions. The optimality
-#     criterion is always assumed to be maximising the discounted expected future reward.
-#     """
-
-#     def __init__(
-#         self,
-#         agent: Agent,
-#         transition_func: Callable[[State, JointAction], Tuple[State, JointReward]],
-#         observation_sampling_func: Callable[[State, JointAction], Observation],
-#         observation_probability_func: Callable[
-#             [Observation, State, JointAction], float
-#         ],
-#         discount_factor: float,
-#     ) -> None:
-#         """
-#         Initialises the frame.
-
-#         Keyword arguments:
-#         agent: the agent whose frame this is
-#         transition_func: the transition function used by the agent
-#         observation_sampling_func: the observation sampling function used by the agent
-#         observation_probabiliity_func: the observation weighting function used by the agent
-#         """
-#         self.agent = agent
-#         self.transition = transition_func
-#         self.sample_observation = observation_sampling_func
-#         self.prob_observation = observation_probability_func
-#         self.discount_factor = discount_factor
-
-
-class Model:
+class Model(ABC):
     """
     An abstract class for a model. A model can be either intentional (I-POMDP / POMDP)
     or subintentional (e.g. a no-information model).
     """
 
 
-class FixedPolicyModel(ABC, Model, Generic[Agent, State, Action]):
+class FixedPolicyModel(Model):
     """
     A model where an agent is assumed to choose an action randomly.
     """
@@ -84,89 +54,141 @@ class FixedPolicyModel(ABC, Model, Generic[Agent, State, Action]):
         """
 
 
-class IPOMDP(ABC, Model, Generic[Agent, State, Action, Observation]):
+class IPOMDP(Model):
     """
-    Defines an abstract base class for I-POMDPs. This means that we define the methods
+    An abstract base class for I-POMDPs. This means that we define the methods
     an I-POMDP class must implement.
-
-    Each instance should additionally have the following attributes:
-    owner_reasoning_level: the reasoning level of the owner of the I-POMDP
-    level_0_model_type: whether the model on level 0 is intentional or not.
     """
 
-    # type hint some instance attributes
+    ## type hint some instance attributes
     owner: Agent
-    owner_reasoning_level: int
+    # owner_reasoning_level: int
     activation_schedule: ActivationSchedule
     discount_factor: float
     agents: Sequence[Agent]
 
-    # def level_model_type(self, level: int) -> ModelType | None:
-    #     """
-    #     Given a level, this method should tell the kind of model used on this level.
-    #     The supplied level should not be larger than owner_reasoning_level.
-    #     """
-    #     if level > self.owner_reasoning_level:
-    #         return None
-    #     elif level > 0:
-    #         return ModelType.Intentional
-    #     else:
-    #         return self.level_0_model_type
+    # define the shapes of state and action arrays
+    state_shape: tuple[int, ...]
+    action_shape: tuple[int, ...]
+
+    # define the data types of the state and action arrays
+    state_dtype: np.dtype
+    action_dtype: np.dtype
+
+    # define which action is the "no turn" action
+    no_turn_action: Action
 
     @abstractmethod
-    def agent_models(self, agent: Agent) -> list[Model]:
+    def agent_models(self, agent: Agent) -> tuple[FixedPolicyModel, tuple[IPOMDP, ...]]:
         """
-        Given an agent, return a list of possible models used for agent.
+        Given an agent, return a default policy and a tuple (possibly empty) of rational
+        models. For the owner of the owner of the I-POMDP there is only a default
+        policy.
         """
 
-    @property
-    def other_agents(self) -> Iterator[Agent]:
-        yield from (ag for ag in self.agents if ag != self.owner)
+    @abstractmethod
+    def possible_actions(self, agent: Agent) -> tuple[Action, ...]:
+        """
+        Given an agent, returns a tuple of all possible actions of that agent.
+        """
 
-    # @abstractmethod
-    # def possible_frames(
-    #     self,
-    #     agent: Agent,
-    #     level: int,
-    #     parent: Optional[Agent] = None,
-    # ) -> List[Frame]:
-    #     """
-    #     Return a list of possible frames prescribed by parent for agent who is at the
-    #     given reasoning level.
-
-    #     Keyword arguments:
-    #     agent: the agent whose frames are of interest
-    #     level: the reasoning level of the agent
-    #     parent: the agent who models "agent" using the frames
-    #     """
+    @abstractmethod
+    def utility_estimate(self, state: State) -> float:
+        """
+        Given a state, this method should return an estimate of the utility of that
+        state (expected discounted sum of rewards assuming optimal action choices).
+        This could be a random roll-out, for example, or domain-specific knowledge
+        can be incorporated.
+        """
 
     @abstractmethod
     def transition(
         self, state: State, joint_action: JointAction
-    ) -> tuple[State, JointReward]:
+    ) -> tuple[State, Reward]:
         """
         Given a joint action taken in a state, return a sample from the distribution
-        of next states and the rewards for each agent.
+        of next states and the reward for the owner.
         """
 
     @abstractmethod
     def sample_observation(
-        self, agent: Agent, state: State, prev_joint_action: JointAction
+        self, state: State, prev_joint_action: JointAction
     ) -> Observation:
         """
         Given the current state and the previous joint action taken, sample an
-        observation for agent from the distribution of possible observations.
+        observation for the owner from the distribution of possible observations.
         """
 
     @abstractmethod
     def prob_observation(
         self,
         observation: Observation,
-        agent: Agent,
+        states: NDArray,
+        prev_joint_actions: NDArray,
+    ) -> NDArray:
+        """
+        Given an observation, an array of states and an array of previous joint
+        actions, return the probability (density) of owner receiving the observation
+        for each state-previous joint action combination.
+
+        Keyword arguments:
+        observation: the received observation
+        states: an array (of shape (k, *self.state_shape)) containing the states where
+                the probability should be calculated
+        prev_joint_actions: an array (of shape (k, n_agents, *self.action_shape))
+                            containing the previously performed actions corresponding
+                            to each state
+
+        Returns:
+        An array of length k which contains the (possibly unnormalised) probabilities.
+        """
+
+    @abstractmethod
+    def initial_belief(
+        self,
+        n_states: int,
+    ) -> tuple[NDArray, tuple[dict[Agent, IPOMDP], ...]]:
+        """
+        Generate a given number of states from the initial belief distribution.
+        A single sample consists of the state (a NumPy array) and a corresponding
+        rational model, i.e. an I-POMDP, for each other agent. If the other agent is
+        not modelled with a rational model, None should be returned instead.
+
+        The initial belief of the owner about the beliefs of other agents are encoded
+        by the initial_belief methods of these nested I-POMDPs. This means that these
+        nested states are assigned uniform weights.
+
+        Keyword arguments:
+        n_states: the number of states to generate
+
+        Returns:
+        A 2-tuple. The first element is a numpy array of shape (n_states,
+        *self.state_shape) and corresponds to the state samples. The second element is
+        a tuple of length n_states. Each element in this tuple is a dictionary where
+        Agents are keys and IPOMDPs values. The I-POMDP returned should correspond to
+        one returned by agent_models.
+        """
+
+    @abstractmethod
+    def add_noise_to_state(
+        self,
         state: State,
-        prev_joint_action: JointAction,
-    ) -> float:
+        random: Random,
+    ) -> State:
         """
-        Given an observation, the current state and the previous joint action, return
-        the probability (density) of receiving the observation.
+        Add noise to the given state. This is used by the algorithm to create a unique
+        new state after a joint action is chosen which has already been used to
+        expand a particle.
+
+        Keyword arguments:
+        state: the state (a Numpy array of shape state_shape) to add noise to
+        random: a random number generator object from the solver
         """
+
+    @property
+    def other_agents(self) -> Iterator[Agent]:
+        yield from (ag for ag in self.agents if ag != self.owner)
+
+    @property
+    def n_agents(self) -> int:
+        return len(self.agents)
