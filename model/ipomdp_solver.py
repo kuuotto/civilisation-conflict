@@ -28,7 +28,6 @@ from envs.ipomdp import (
 
 JointActionHistory = tuple[JointAction, ...]
 AgentActionHistory = tuple[Action, ...]
-ForestSignature = tuple[Agent, ...]
 Belief = NDArray[np.float_]
 
 
@@ -469,11 +468,7 @@ class ForestGroup:
             assert current_node is not None
 
             # get weights for node based on the particle
-            belief = particle.other_agents_belief[next_agent]
-            assert belief is not None
-            mask, values = belief
-            particle_weights = np.zeros(len(mask))
-            particle_weights[mask] = values
+            particle_weights = decode_belief(particle.other_agents_belief[next_agent])
 
             # if belief is diverged, we cannot simulate
             if particle_weights.sum() == 0:
@@ -504,16 +499,16 @@ class ForestGroup:
     def is_empty(self) -> bool:
         return len(self.forests) == 0
 
-    def get_forest(self, ipomdp: IPOMDP) -> Forest | None:
+    def get_forest(self, ipomdp: IPOMDP) -> Forest:
         """
         Given an ipomdp, find the forest in this forest group that represents the
-        ipomdp. Return None if no such forest exists.
+        ipomdp. Raises an exception if the forest is not found.
         """
         for forest in self.forests:
             if forest.ipomdp is ipomdp:
                 return forest
 
-        return None
+        raise Exception("A forest corresponding to the given IPOMDP was not found.")
 
 
 class Forest:
@@ -768,6 +763,7 @@ class Forest:
             state=propagated_state,
             joint_action_history=new_joint_action_history,
             node=next_node,
+            other_agents_forest=particle.other_agents_forest,
             previous_particle=particle,
         )
 
@@ -1202,16 +1198,17 @@ class Node:
             n_states=n_particles
         )
 
-        # create particles
-        particles = [
-            Particle(state=state, joint_action_history=(), node=self)
-            for state in initial_states
-        ]
-
-        # assign models and beliefs to other agents
-        for p, p_other_agent_ipomdps in zip(
-            particles, other_agent_ipomdps, strict=True
+        # create a new particle for each sample
+        for p_state, p_other_agent_ipomdps in zip(
+            initial_states, other_agent_ipomdps, strict=True
         ):
+            ### map other agents' ipomdps to forests and create initial beliefs
+            # TODO: room for optimisation. Since there are only a limited number of
+            # different I-POMDPs for other agents, dictionaries could be re-used
+            # between particles instead of creating a new one for each one.
+            p_other_agents_forest: dict[Agent, Forest] = {}
+            p_other_agents_belief: dict[Agent, SparseBelief] = {}
+
             for other_agent, other_agent_ipomdp in p_other_agent_ipomdps.items():
                 # no need to do anything if other agent is not modelled rationally
                 if other_agent_ipomdp is None:
@@ -1219,7 +1216,7 @@ class Node:
 
                 # store the forest corresponding to the I-POMDP used to model the
                 # other agent
-                p.other_agents_forest[other_agent] = other_agents_forest_group[
+                p_other_agents_forest[other_agent] = other_agents_forest_group[
                     other_agent
                 ].get_forest(other_agent_ipomdp)
 
@@ -1228,11 +1225,19 @@ class Node:
                 particle_weights = np.array(n_particles * (1 / n_particles,))
 
                 # store weights in sparse format
-                p.other_agents_belief[other_agent] = encode_belief(particle_weights)
+                p_other_agents_belief[other_agent] = encode_belief(particle_weights)
 
-        # add particles to the node
-        for p in particles:
-            self.add_particle(p)
+            # create a new particle
+            particle = Particle(
+                state=p_state,
+                joint_action_history=(),
+                node=self,
+                other_agents_forest=p_other_agents_forest,
+            )
+            particle.other_agents_belief = p_other_agents_belief
+
+            # add particles to the node
+            self.add_particle(particle)
 
     def __repr__(self) -> str:
         return f"Node({self.agent_action_history}, {len(self.particles)} particles)"
@@ -1318,16 +1323,13 @@ class Node:
         for particle in self.particles:
             assert particle.previous_particle is not None
 
-            # store the frames for other agents, these are inherited from the ancestor
-            particle.other_agents_forest = (
-                particle.previous_particle.other_agents_forest
-            )
-
             # weight the particles in the lower forests using the ancestor of particle.
             # This returns a dictionary of the nodes where the weights have been
             # initialised. Thus, if an agent is not modelled rationally, it will not be
             # included in the dictionary.
-            other_agent_nodes = particle.initialise_child_forest_beliefs()
+            other_agent_nodes = (
+                particle.previous_particle.initialise_child_forest_beliefs()
+            )
 
             # TODO: I think this is wrong -- other_agent_node corresponds to the time
             # t root nodes, not the time t+1 nodes for which we want to generate
@@ -1530,13 +1532,13 @@ class Particle:
     # pre-define names of attributes to reduce memory usage
     __slots__ = (
         "node",
-        "previous_particle",
         "id",
+        "previous_particle",
+        "next_particles",
         "_state",
         "joint_action_history",
-        "other_agents_belief",
         "other_agents_forest",
-        "propagated_actions",
+        "other_agents_belief",
     )
 
     def __init__(
@@ -1544,23 +1546,23 @@ class Particle:
         state: State,
         joint_action_history: JointActionHistory,
         node: Node,
+        other_agents_forest: dict[Agent, Forest],
         previous_particle: Particle | None = None,
     ) -> None:
-        # identifiers of the particle
         self.node = node
-        self.previous_particle = previous_particle  # can be None if in root node
 
         # the id of the particle is set by the Node when the particle is added to it
         self.id: int | None = None
 
+        # links to others in the chain of particles
+        self.previous_particle = previous_particle  # can be None if in root node
+        self.next_particles: list[Particle] = list()
+
         # properties of the particle
         self._state: State | None = state
         self.joint_action_history = joint_action_history
-        self.other_agents_forest: dict[Agent, Forest | None] = {}
-        self.other_agents_belief: dict[Agent, SparseBelief | None] = {}
-
-        # this keeps track of joint actions that have been used to propagate this particle
-        self.propagated_actions: set[JointAction] = set()
+        self.other_agents_forest = other_agents_forest
+        self.other_agents_belief: dict[Agent, SparseBelief] = {}
 
     def update_previous_particle_id(self, new_id: int) -> None:
         self.node._prev_particle_ids[self.id] = new_id
@@ -1617,7 +1619,11 @@ class Particle:
         """
         Checks whether this particle has been propagated with the given action before.
         """
-        return joint_action in self.propagated_actions
+        for next_particle in self.next_particles:
+            if next_particle.joint_action_history[-1] == joint_action:
+                return True
+
+        return False
 
     def add_expansion(
         self, joint_action: JointAction, value: float, next_particle: Particle
@@ -1641,8 +1647,8 @@ class Particle:
         if next_particle.added_to_node:
             next_particle.update_previous_particle_id(self.id)
 
-        # store the action (used to check if noise needs to be added)
-        self.propagated_actions.add(joint_action)
+        # store reference to the next particle
+        self.next_particles.append(next_particle)
 
         # if agent didn't act, there's no further information to store
         if joint_action[ipomdp.owner] == ipomdp.no_turn_action:
@@ -1699,39 +1705,32 @@ class Particle:
     def initialise_child_forest_beliefs(self) -> dict[Agent, Node]:
         """
         Initialise the weights in the immediate child forests of the forest the \
-        particle is in using the weights stored in it (or its oldest ancestor in \
-        case it itself is not in a root node).
+        particle is in using the weights stored in it.
+
+        NOTE: Beliefs are not initialised in all forests. Instead, they are only
+        initialised in the forests to which this particle points.
 
         Returns:
         A dictionary pointing to the nodes of other agents in the forests one level 
         below. These are the nodes in which beliefs were initialised. The keys are 
         the agents.
         """
-        # find the particle which holds weights for particles in the root nodes of
-        # lower level forests. If start_particle is in a root node, then it is the
-        # same as ancestor_particle
-        ancestor_particle = self.ancestor_particle()
-
-        # find the nodes corresponding to ancestor particle in the forests of other
-        # agents on the level below.
-        # we cast to convince type checker that returned nodes are never None.
+        ### find the nodes corresponding to self in the forests of other agents on the
+        ### level below.
+        # We cast to convince type checker that returned nodes are never None.
         other_agent_nodes = {
             other_agent: cast(
                 Node,
-                ancestor_particle.get_agent_child_forest_node(agent=other_agent)[1],
+                self.get_agent_child_forest_node(agent=other_agent)[1],
             )
-            for other_agent, other_agent_forest in self.other_agents_forest.items()
-            if other_agent_forest is not None
+            for other_agent in self.other_agents_forest.keys()
         }
 
         ### initialise beliefs in the nodes
         for other_agent, other_agent_node in other_agent_nodes.items():
-            # check that other_agent has weights stored for its forest
-            other_agent_belief = ancestor_particle.other_agents_belief[other_agent]
-            assert other_agent_belief is not None
-
-            # assign belief to the node
-            other_agent_node.belief = decode_belief(other_agent_belief)
+            other_agent_node.belief = decode_belief(
+                self.other_agents_belief[other_agent]
+            )
 
         return other_agent_nodes
 
