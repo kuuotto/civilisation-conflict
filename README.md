@@ -16,6 +16,6 @@ The file **`run.py`** can be used to perform a single model run. You can adjust 
 
 This project was built using Python 3.11.3. To install the required software, create a new Conda environment with
 
-    $ conda create --name <env> --file requirements.txt
+    conda create --name <env> --file requirements.txt
 
 Note that this is simply the state of the development environment and might therefore contain unnecessary packages.
