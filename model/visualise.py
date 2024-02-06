@@ -1,14 +1,16 @@
 # %%
 
-import numpy as np
-import pandas as pd
+from typing import List
+
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle, Patch
+import numpy as np
+import pandas as pd
 from matplotlib.animation import ArtistAnimation
+from matplotlib.patches import Circle, Patch
 from matplotlib.ticker import MultipleLocator
-from model import analyse, ipomdp_solver, universe, growth
-from typing import List
+
+from model import analyse, growth, ipomdp_solver, universe
 
 
 def draw_universe(
@@ -160,8 +162,8 @@ def draw_universe(
                 t_x, t_y = step_data.loc[target_id].Position.values[0]
 
                 # whether target was within the radius of influence of the attacker
-                attack_possible = not np.isnan(
-                    step_action_data["attack_successful"].iat[0]
+                attack_possible = (
+                    step_action_data["attack_successful"].iat[0] is not None
                 )
 
                 arrow = ax.arrow(
@@ -460,7 +462,7 @@ def plot_particles_n2(
 
     ax.set_xlim(0 - 0.02, 1 + 0.02)
     ax.set_ylim(0 - 0.02, 1 + 0.02)
-    ax.set_title(f"Particle states")
+    ax.set_title("Particle states")
     ax.set_xlabel("Technology level of agent 0")
     ax.set_ylabel("Technology level of agent 1")
     ax.grid()
@@ -581,7 +583,7 @@ def plot_tree_particle_counts(
     ax.xaxis.set_major_locator(MultipleLocator(1))
     ax.set_xlabel("Node depth")
     ax.set_ylabel("Number of particles")
-    ax.set_title(f"Numbers of particles in nodes")
+    ax.set_title("Numbers of particles in nodes")
     ax.set_yscale("symlog")
     ax.grid(visible=True)
     ax.legend()
