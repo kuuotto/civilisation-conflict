@@ -1,16 +1,18 @@
+from typing import Dict, Iterable, Tuple
+
 import numpy as np
-from scipy import stats
-from model import ipomdp_solver, universe
-from typing import Dict, Tuple, Iterable
 import pandas as pd
+from scipy import stats
+
+from model import ipomdp_solver, universe
 
 
 def _count_streaks(data: Iterable) -> Dict[int, int]:
     """
     Counts the streaks from time stamps.
-    
+
     Keyword arguments:
-    data: an array, pandas Series etc. which contains the time stamps of the events 
+    data: an array, pandas Series etc. which contains the time stamps of the events
           of interest.
     """
     if len(data) == 0:
@@ -40,19 +42,40 @@ def _count_streaks(data: Iterable) -> Dict[int, int]:
 
     return streaks
 
+
 def count_attack_streaks(action_data: pd.DataFrame) -> Dict[int, int]:
     """
     Counts the attack streaks (attacks at successive time steps) in the action data.
-    
+
     Attacks that don't take place because the attacker cannot reach the target are
     not counted as attacks.
 
     Keyword arguments:
     action_data: the action data DataFrame returned by a Universe object
     """
-    attacks = action_data[(action_data.action == "a") & ~(action_data["attack_successful"].isnull())]
+    attacks = action_data[
+        (action_data.action == "a") & ~(action_data["attack_successful"].isnull())
+    ]
     streaks = _count_streaks(attacks["time"].values)
     return streaks
+
+
+def count_peace_streaks(action_data: pd.DataFrame) -> Dict[int, int]:
+    """
+    Counts the peace streaks (non-attacks at successive time steps) in the action data.
+
+    Attacks that don't take place because the attacker cannot reach the target are
+    not counted as attacks.
+
+    Keyword arguments:
+    action_data: the action data DataFrame returned by a Universe object
+    """
+    non_attacks = action_data[
+        ~((action_data.action == "a") & ~(action_data["attack_successful"].isnull()))
+    ]
+    streaks = _count_streaks(non_attacks["time"].values)
+    return streaks
+
 
 def count_particles_by_depth(model: universe.Universe) -> Dict:
     """
