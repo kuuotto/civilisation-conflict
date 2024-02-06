@@ -18,7 +18,7 @@ def create_small_universe(**kwargs):
         "n_root_belief_samples": 1000,
         "n_tree_simulations": 200,
         "obs_noise_sd": 0.1,
-        "obs_self_noise_sd": 0.03,
+        "obs_self_noise_sd": 0.1,  # deprecated, model does not use this
         "reasoning_level": 2,
         "action_dist_0": "random",
         "initial_belief": "uniform",  # can be "uniform" or "surpass_scenario"

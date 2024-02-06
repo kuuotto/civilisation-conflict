@@ -1,8 +1,10 @@
 import unittest
+
 import numpy as np
 from scipy.stats import norm
+
+from model import action, growth, ipomdp
 from tests import helpers
-from model import growth, ipomdp, action
 
 
 class TestTransition(unittest.TestCase):
@@ -126,7 +128,7 @@ class TestTransition(unittest.TestCase):
 
 
 class TestInitialBelief(unittest.TestCase):
-    def test_initial_belief(self):
+    def test_uniform_initial_belief(self):
         model = helpers.create_small_universe(
             n_agents=5,
             agent_growth="sigmoid",
@@ -141,7 +143,9 @@ class TestInitialBelief(unittest.TestCase):
         agent = model.agents[0]
 
         # generate belief
-        init_belief = ipomdp.sample_init(n_samples=3, model=model, agent=agent)
+        init_belief = ipomdp.uniform_initial_belief(
+            n_samples=3, model=model, agent=agent
+        )
 
         # check shape
         correct_shape = (3, 5, 4)
