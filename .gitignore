@@ -129,4 +129,7 @@ dmypy.json
 .pyre/
 
 # output directory
-output/
+/output/
+
+# experiment output directories
+/experiments/**/experiment*_output/*
