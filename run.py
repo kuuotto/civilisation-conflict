@@ -1,8 +1,10 @@
 # %%
-import matplotlib.pyplot as plt
-from model import universe, visualise
-from tqdm import tqdm
 import pickle
+
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+
+from model import analyse, universe, visualise
 
 # %% Run model and gather data
 
@@ -20,7 +22,7 @@ params = {
     "rewards": {"destroyed": -1, "hide": -0.01, "attack": 0},
     "prob_indifferent": 0,
     "n_root_belief_samples": 1000,
-    "n_tree_simulations": 10000,
+    "n_tree_simulations": 1000,
     "obs_noise_sd": 0.15,
     "obs_self_noise_sd": 0.15,
     "reasoning_level": 1,
@@ -33,8 +35,8 @@ params = {
     },
     "discount_factor": 0.6,
     "discount_epsilon": 0.10,
-    "exploration_coef": 0.3,
-    "softargmax_coef": 0.01,
+    "exploration_coef": 0.6,
+    "softargmax_coef": 0.1,
     "visibility_multiplier": 0.5,
     "decision_making": "ipomdp",
     "init_age_belief_range": (0, 50),
@@ -72,11 +74,11 @@ with open("output/data.pickle", "wb") as f:
 vis = visualise.draw_universe(
     data=agent_data,
     action_data=action_data,
-    anim_filename="output/output.mp4",
+    anim_filename="output/output.gif",
     anim_length=60,
 )
 plt.show()
 
 # %% Diagnostic plots
-visualise.plot_technology_distribution(agent_data, **params)
-visualise.plot_streak_length_distribution(action_data, **params)
+visualise.plot_technology_distribution(agent_data)
+visualise.plot_streak_length_distribution(analyse.count_attack_streaks(action_data))
